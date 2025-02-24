@@ -463,6 +463,157 @@ class Controller(Generic[Context]):
 				logger.error(msg)
 				return ActionResult(error=msg, include_in_memory=True)
 
+		@self.registry.action(
+			description='Handle any type of dropdown (both native <select> and custom dropdowns)',
+		)
+		async def handle_dropdown(
+			index: int,
+			text: str,
+			browser: BrowserContext,
+		) -> ActionResult:
+			"""Handle both native <select> and custom dropdowns"""
+			page = await browser.get_current_page()
+			selector_map = await browser.get_selector_map()
+			dom_element = selector_map[index]
+			
+			# First try native select handling
+			if dom_element.tag_name == 'select':
+				# Use existing select_dropdown_option logic
+				return await self.registry.execute_action('select_dropdown_option', {'index': index, 'text': text}, browser)
+			else:
+				# Handle custom dropdown
+				try:
+					# 1. Click to open the dropdown
+					await browser._click_element_node(dom_element)
+					await asyncio.sleep(0.5)  # Wait for dropdown to open
+					
+					# 2. Find and click the option with matching text
+					option_found = await page.evaluate("""
+						(text) => {
+							// Look for elements that might be dropdown options
+							const options = Array.from(document.querySelectorAll('.select__option, [role="option"], .dropdown-item, li'));
+							for (const option of options) {
+								if (option.textContent.trim() === text) {
+									option.click();
+									return true;
+								}
+							}
+							return false;
+						}
+					""", text)
+					
+					if option_found:
+						msg = f'Selected option "{text}" in custom dropdown'
+						logger.info(msg)
+						return ActionResult(extracted_content=msg, include_in_memory=True)
+					else:
+						msg = f'Could not find option "{text}" in custom dropdown'
+						logger.info(msg)
+						return ActionResult(extracted_content=msg, include_in_memory=True)
+						
+				except Exception as e:
+					msg = f'Custom dropdown selection failed: {str(e)}'
+					logger.error(msg)
+					return ActionResult(error=msg, include_in_memory=True)
+
+		@self.registry.action(
+			description='Handle custom dropdown by clicking to open it and then clicking the option with the specified text',
+		)
+		async def handle_custom_dropdown(
+			dropdown_index: int,
+			option_text: str,
+			browser: BrowserContext,
+		) -> ActionResult:
+			"""Handle custom dropdowns by clicking to open and then clicking the option"""
+			page = await browser.get_current_page()
+			selector_map = await browser.get_selector_map()
+			
+			try:
+				# 1. Click to open the dropdown
+				dropdown_element = selector_map[dropdown_index]
+				logger.info(f"Clicking dropdown element with index {dropdown_index}")
+				await browser._click_element_node(dropdown_element)
+				await asyncio.sleep(0.5)  # Wait for dropdown to open
+				
+				# 2. Get updated DOM after dropdown opens
+				updated_state = await browser.get_state()
+				updated_selector_map = updated_state.selector_map
+				
+				# 3. Look for option elements that appeared after opening the dropdown
+				option_found = False
+				for idx, element in updated_selector_map.items():
+					element_text = element.get_all_text_till_next_clickable_element()
+					if (element_text and option_text in element_text) or (element.attributes.get('value') == option_text):
+						logger.info(f"Found matching option with index {idx}: {element_text}")
+						await browser._click_element_node(element)
+						option_found = True
+						break
+						
+				if option_found:
+					msg = f'Selected option "{option_text}" in custom dropdown'
+					return ActionResult(extracted_content=msg, include_in_memory=True)
+				else:
+					msg = f'Could not find option "{option_text}" in dropdown. Try clicking the dropdown again and looking for the option.'
+					return ActionResult(extracted_content=msg, include_in_memory=True)
+				
+			except Exception as e:
+				msg = f'Custom dropdown handling failed: {str(e)}'
+				logger.error(msg)
+				return ActionResult(error=msg, include_in_memory=True)
+
+		@self.registry.action(
+			description='Navigate dropdown using keyboard (Tab, Arrow keys, Enter)',
+		)
+		async def dropdown_keyboard_navigation(
+			dropdown_index: int,
+			option_position: int,  # Approximate position of the option (1 for first, 2 for second, etc.)
+			browser: BrowserContext,
+		) -> ActionResult:
+			"""Navigate dropdown using keyboard"""
+			page = await browser.get_current_page()
+			selector_map = await browser.get_selector_map()
+			
+			try:
+				# 1. Click to focus the dropdown
+				dropdown_element = selector_map[dropdown_index]
+				await browser._click_element_node(dropdown_element)
+				
+				# 2. Press down arrow to open dropdown and navigate
+				for _ in range(option_position):
+					await page.keyboard.press("ArrowDown")
+					await asyncio.sleep(0.2)
+				
+				# 3. Press Enter to select
+				await page.keyboard.press("Enter")
+				
+				msg = f'Used keyboard navigation to select option at position {option_position}'
+				return ActionResult(extracted_content=msg, include_in_memory=True)
+			except Exception as e:
+				msg = f'Keyboard navigation failed: {str(e)}'
+				logger.error(msg)
+				return ActionResult(error=msg, include_in_memory=True)
+
+		@self.registry.action(
+			description='Detect the type of dropdown (native select or custom) to determine the best interaction method',
+		)
+		async def detect_dropdown_type(
+			index: int,
+			browser: BrowserContext,
+		) -> ActionResult:
+			"""Detect if element is a native select or custom dropdown"""
+			selector_map = await browser.get_selector_map()
+			dom_element = selector_map[index]
+			
+			if dom_element.tag_name == 'select':
+				msg = 'Element is a native <select> dropdown. Use select_dropdown_option.'
+			elif 'select' in dom_element.attributes.get('class', '').lower() or dom_element.attributes.get('role') == 'combobox':
+				msg = 'Element appears to be a custom dropdown. Click it to open, then click the desired option.'
+			else:
+				msg = 'Element does not appear to be a dropdown. Consider other interaction methods.'
+			
+			logger.info(msg)
+			return ActionResult(extracted_content=msg, include_in_memory=True)
+
 	# Register ---------------------------------------------------------------
 
 	def action(self, description: str, **kwargs):
