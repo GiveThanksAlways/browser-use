@@ -25,6 +25,7 @@ from browser_use.controller.views import (
 	SwitchTabAction,
 )
 from browser_use.utils import time_execution_sync
+from browser_use.controller.greenhouse_helpers import is_greenhouse_dropdown, get_greenhouse_dropdown_options, track_dropdown_completion, get_dropdown_completion_status
 
 logger = logging.getLogger(__name__)
 
@@ -464,25 +465,76 @@ class Controller(Generic[Context]):
 				return ActionResult(error=msg, include_in_memory=True)
 
 		@self.registry.action(
-			description='Handle any type of dropdown (both native <select> and custom dropdowns)',
+			description='Handle any type of dropdown (both native <select> and custom dropdowns) with optimization for Greenhouse.io',
 		)
 		async def handle_dropdown(
 			index: int,
 			text: str,
 			browser: BrowserContext,
 		) -> ActionResult:
-			"""Handle both native <select> and custom dropdowns"""
+			"""Handle both native <select> and custom dropdowns with greenhouse optimization"""
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
 			
-			# First try native select handling
+			# Check if we've already handled this dropdown to avoid loops
+			is_new_completion = track_dropdown_completion(index, text)
+			if not is_new_completion:
+				completion_status = get_dropdown_completion_status()
+				msg = f"SKIPPING: Dropdown with index {index} and value '{text}' was already completed.\n{completion_status}"
+				logger.warning(msg)
+				return ActionResult(extracted_content=msg, include_in_memory=True)
+			
+			# First check if this is a Greenhouse.io dropdown we can optimize
+			is_greenhouse, field_id = is_greenhouse_dropdown(dom_element)
+			
+			if is_greenhouse:
+				logger.info(f"Processing Greenhouse dropdown: index={index}, field_id={field_id}")
+				cached_options = get_greenhouse_dropdown_options(field_id)
+				
+				if cached_options and text in cached_options:
+					logger.info(f"Using optimized approach for Greenhouse dropdown: index={index}, field_id={field_id}, text='{text}'")
+					
+					try:
+						# 1. Click to open the dropdown
+						await browser._click_element_node(dom_element)
+						await asyncio.sleep(0.5)  # Wait for dropdown to open
+						
+						# 2. Try to find and click the option matching our cached knowledge
+						option_selectors = [
+							f"//div[contains(@class, 'select__option') and contains(text(), '{text}')]",
+							f"//div[contains(@class, 'select__option') and text()='{text}']",
+							f"//div[contains(@id, 'react-select-{field_id}-option') and contains(text(), '{text}')]"
+						]
+						
+						for selector in option_selectors:
+							try:
+								logger.debug(f"Trying selector: {selector}")
+								option = await page.wait_for_selector(selector, timeout=1000)
+								if option:
+									await option.click()
+									msg = f'SUCCESS: Selected "{text}" from Greenhouse dropdown {field_id} using cached approach'
+									logger.info(msg)
+									return ActionResult(extracted_content=msg, include_in_memory=True)
+							except Exception as e:
+								logger.debug(f"Selector {selector} failed: {str(e)}")
+								continue
+						
+						logger.info(f"Cached approach failed, falling back to standard method")
+					
+					except Exception as e:
+						logger.error(f"Error in Greenhouse dropdown handler: {str(e)}")
+						# Fall through to standard methods if optimized approach failed
+			
+			# Original implementation for native select
 			if dom_element.tag_name == 'select':
+				logger.info(f"Processing native select dropdown: index={index}")
 				# Use existing select_dropdown_option logic
 				return await self.registry.execute_action('select_dropdown_option', {'index': index, 'text': text}, browser)
 			else:
 				# Handle custom dropdown
 				try:
+					logger.info(f"Processing custom dropdown: index={index}")
 					# 1. Click to open the dropdown
 					await browser._click_element_node(dom_element)
 					await asyncio.sleep(0.5)  # Wait for dropdown to open
@@ -492,6 +544,14 @@ class Controller(Generic[Context]):
 						(text) => {
 							// Look for elements that might be dropdown options
 							const options = Array.from(document.querySelectorAll('.select__option, [role="option"], .dropdown-item, li'));
+							console.log('Found ' + options.length + ' potential dropdown options');
+							
+							// Log what we found
+							options.forEach((opt, i) => {
+								console.log(`Option ${i}: ${opt.textContent.trim()}`);
+							});
+							
+							// Try to find and click the matching option
 							for (const option of options) {
 								if (option.textContent.trim() === text) {
 									option.click();
@@ -503,16 +563,36 @@ class Controller(Generic[Context]):
 					""", text)
 					
 					if option_found:
-						msg = f'Selected option "{text}" in custom dropdown'
+						msg = f'SUCCESS: Selected option "{text}" in custom dropdown (index={index})'
 						logger.info(msg)
 						return ActionResult(extracted_content=msg, include_in_memory=True)
 					else:
-						msg = f'Could not find option "{text}" in custom dropdown'
-						logger.info(msg)
-						return ActionResult(extracted_content=msg, include_in_memory=True)
+						# Try a less strict matching approach
+						option_found = await page.evaluate("""
+							(text) => {
+								const options = Array.from(document.querySelectorAll('.select__option, [role="option"], .dropdown-item, li'));
+								for (const option of options) {
+									if (option.textContent.trim().includes(text) || text.includes(option.textContent.trim())) {
+										console.log('Found partial match: ' + option.textContent.trim());
+										option.click();
+										return true;
+									}
+								}
+								return false;
+							}
+						""", text)
+						
+						if option_found:
+							msg = f'SUCCESS: Selected option partially matching "{text}" in custom dropdown (index={index})'
+							logger.info(msg)
+							return ActionResult(extracted_content=msg, include_in_memory=True)
+						else:
+							msg = f'FAILED: Could not find option "{text}" in custom dropdown (index={index})'
+							logger.warning(msg)
+							return ActionResult(extracted_content=msg, include_in_memory=True)
 						
 				except Exception as e:
-					msg = f'Custom dropdown selection failed: {str(e)}'
+					msg = f'ERROR: Custom dropdown selection failed: {str(e)}'
 					logger.error(msg)
 					return ActionResult(error=msg, include_in_memory=True)
 
