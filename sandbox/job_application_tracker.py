@@ -22,6 +22,7 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 import concurrent.futures
 from dataclasses import dataclass, asdict
 import re
+import platform
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -53,8 +54,10 @@ TO_APPLY_CSV = SANDBOX_PATH / 'jobs_to_apply.csv'
 APPLIED_CSV = SANDBOX_PATH / 'jobs_applied.csv'
 
 # Browser configuration - update with your browser path
-CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'  # Windows
-# CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'  # macOS
+if platform.system() == 'Windows':
+    CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'  # Windows
+else:
+    CHROME_PATH = '/opt/google/chrome/chrome'  # Linux
 
 # Define job data structure
 @dataclass
@@ -67,20 +70,17 @@ class Job:
     status: str = "to_apply"  # to_apply, applied, failed
     notes: str = ""
 
-# Define the output format as a Pydantic model
+# Define a simpler Pydantic model with fewer required fields
 class JobListing(BaseModel):
     job_title: str = Field(description="The title of the job position")
-    company_name: Optional[str] = Field(
-        default="Anduril Industries",  # Default value since all jobs are from Anduril
+    apply_link: str = Field(description="URL link to apply for the job")
+    company_name: str = Field(
+        default="Anduril Industries",
         description="The name of the company offering the job"
     )
     location: Optional[str] = Field(
         default="",
         description="The location of the job"
-    )
-    apply_link: Optional[str] = Field(
-        default="",
-        description="URL link to apply for the job"
     )
     description: Optional[str] = Field(
         default="",
@@ -89,14 +89,6 @@ class JobListing(BaseModel):
 
 class JobListingsChunk(BaseModel):
     jobs: List[JobListing] = Field(description="List of job listings found in this chunk")
-    chunk_number: Optional[int] = Field(
-        default=1,
-        description="The number of this chunk in the sequence"
-    )
-    total_chunks: Optional[int] = Field(
-        default=1,
-        description="Total number of chunks processed"
-    )
 
 class JobListings(BaseModel):
     jobs: List[JobListing]
@@ -232,6 +224,9 @@ async def extract_job_listings_chunked(goal: str, browser: BrowserContext, page_
     # Get the full page content
     content = markdownify.markdownify(await page.content())
     
+    # Print a sample of the content for debugging
+    logger.debug(f"Sample content: {content[:500]}")
+    
     # Define chunking parameters
     chunk_size = 10000  # Characters per chunk
     max_chunks = 10     # Maximum number of chunks to process
@@ -255,40 +250,42 @@ async def extract_job_listings_chunked(goal: str, browser: BrowserContext, page_
         # Create a structured output version of the LLM
         structured_llm = page_extraction_llm.with_structured_output(JobListingsChunk)
         
-        # Use a prompt that guides the model to extract job listings
+        # Use a simpler prompt that focuses on the essential fields
         prompt = '''
-        Extract all job listings from this chunk of a job board page.
-        This is chunk {chunk_num} of {total_chunks}.
+        Extract job listings from this chunk of a job board page.
         
-        For each job listing you find, extract:
-        1. Job title (REQUIRED)
-        2. Company name (REQUIRED - if not explicitly mentioned, use "Anduril Industries")
-        3. Location (if available)
-        4. Link to apply (if available)
-        5. Brief description (if available)
+        For each job listing, I need:
+        1. job_title (REQUIRED)
+        2. apply_link (REQUIRED)
         
-        IMPORTANT: Every job MUST have both a job_title and company_name.
+        FOCUS ON LINKS:
+        - Look for markdown links in the format [Apply](URL)
+        - Extract the COMPLETE URL from inside the parentheses
+        - Do not modify or truncate the URLs
         
-        Only include job listings you can definitively identify in this chunk.
-        Extraction goal: {goal}
+        Example in the content:
+        ```
+        Mission Software Engineer
+        Costa Mesa, California, United States
+        [Apply](https://boards.greenhouse.io/andurilindustries/jobs/4608506007)
+        ```
+        
+        This should be extracted as:
+        - job_title: "Mission Software Engineer"
+        - apply_link: "https://boards.greenhouse.io/andurilindustries/jobs/4608506007"
         
         Page chunk: {page}
         '''
         
         template = PromptTemplate(
-            input_variables=['chunk_num', 'total_chunks', 'goal', 'page'],
+            input_variables=['page'],
             template=prompt
         )
         
         try:
             # Use structured output to get properly formatted results
             chunk_result = await structured_llm.ainvoke(
-                template.format(
-                    chunk_num=i+1,
-                    total_chunks=len(chunks),
-                    goal=goal,
-                    page=chunk
-                )
+                template.format(page=chunk)
             )
             
             # Add jobs from this chunk to our overall list
@@ -304,62 +301,57 @@ async def extract_job_listings_chunked(goal: str, browser: BrowserContext, page_
                 regular_llm = page_extraction_llm
                 fallback_prompt = '''
                 Extract job listings from this chunk of a job board page.
-                Return ONLY a JSON object with this exact structure:
-                {
-                  "jobs": [
-                    {
-                      "job_title": "Required job title",
-                      "company_name": "Anduril Industries",
-                      "location": "Optional location",
-                      "apply_link": "Optional link",
-                      "description": "Optional description"
-                    }
-                  ]
-                }
+                Return ONLY a JSON array of job objects with this structure:
+                [
+                  {
+                    "job_title": "Required job title",
+                    "apply_link": "Required link from [Apply](URL) pattern"
+                  }
+                ]
                 
-                Extraction goal: {goal}
+                IMPORTANT: Look for markdown links in the format [Apply](URL) and extract the complete URL.
+                
                 Page chunk: {page}
                 '''
                 
                 fallback_template = PromptTemplate(
-                    input_variables=['goal', 'page'],
+                    input_variables=['page'],
                     template=fallback_prompt
                 )
                 
                 fallback_result = await regular_llm.ainvoke(
-                    fallback_template.format(goal=goal, page=chunk)
+                    fallback_template.format(page=chunk)
                 )
                 
                 # Try to extract JSON from the response
                 import re
-                json_pattern = r'(\{[\s\S]*\})'
+                json_pattern = r'(\[[\s\S]*\])'
                 json_matches = re.findall(json_pattern, fallback_result.content)
                 
                 if json_matches:
                     parsed_data = json.loads(json_matches[0])
-                    if "jobs" in parsed_data and isinstance(parsed_data["jobs"], list):
+                    if isinstance(parsed_data, list):
                         # Manually validate and fix each job
-                        for job in parsed_data["jobs"]:
-                            if "job_title" in job:
+                        for job in parsed_data:
+                            if "job_title" in job and "apply_link" in job:
                                 # Create a valid job object
                                 valid_job = JobListing(
-                                    job_title=job.get("job_title", "Unknown Position"),
-                                    company_name=job.get("company_name", "Anduril Industries"),
+                                    job_title=job.get("job_title"),
+                                    apply_link=job.get("apply_link"),
+                                    company_name="Anduril Industries",
                                     location=job.get("location", ""),
-                                    apply_link=job.get("apply_link", ""),
                                     description=job.get("description", "")
                                 )
                                 all_jobs.append(valid_job)
                         
-                        logger.info(f"Fallback extracted {len(parsed_data['jobs'])} jobs from chunk {i+1}")
+                        logger.info(f"Fallback extracted {len(parsed_data)} jobs from chunk {i+1}")
             except Exception as fallback_err:
                 logger.error(f"Fallback extraction also failed: {str(fallback_err)}")
     
     # Create the final combined result
     combined_result = {
         "jobs": [job.model_dump() for job in all_jobs],
-        "total_jobs_found": len(all_jobs),
-        "chunks_processed": len(chunks)
+        "total_jobs_found": len(all_jobs)
     }
     
     result_json_str = json.dumps(combined_result, indent=2)
@@ -398,10 +390,10 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
         task_description = f"""
         Extract information about all available jobs.
         For each job listing, extract:
-        1. Job title
-        2. Company name
-        3. Location
-        4. Link to apply
+        1. Job title (REQUIRED)
+        2. Company name (if available)
+        3. Location (if available)
+        4. Link to apply (REQUIRED - find the URL from the "Apply" button or link)
         5. Brief description (if available)
         
         Return the data in the required structured format.
