@@ -35,7 +35,6 @@ from browser_use.browser.browser import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import PromptTemplate
-from browser_use.controller.greenhouse_helpers import GREENHOUSE_DROPDOWN_CACHE, reset_dropdown_tracking
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -169,6 +168,7 @@ def move_job_between_csvs(job: Job, source_csv: Path, target_csv: Path,
 # Job application controller
 controller = Controller()
 controller_extract = Controller(output_model=JobListings)
+controller_dropdown = Controller()
 
 @controller.action('Upload resume to application form')
 async def upload_resume(index: int, browser: BrowserContext):
@@ -326,7 +326,8 @@ async def extract_job_listings_chunked(goal: str, browser: BrowserContext, page_
                 # Try to extract JSON from the response
                 import re
                 json_pattern = r'(\[[\s\S]*\])'
-                json_matches = re.findall(json_pattern, fallback_result.content)
+                content_str = str(fallback_result.content) if hasattr(fallback_result, 'content') else str(fallback_result)
+                json_matches = re.findall(json_pattern, content_str)
                 
                 if json_matches:
                     parsed_data = json.loads(json_matches[0])
@@ -400,14 +401,20 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
         Only extract job listings - don't apply to any jobs.
         """
 
-        extend_system_message = """
-        IMPORTANT: Use the 'extract_job_listings_chunked' tool to handle the large page content.
-        DO NOT use the regular 'extract_job_listings' or 'extract_content' tools as they may fail with large pages.
-
-        The extract_job_listings_chunked tool will process the page in manageable chunks to avoid token limits. Only call this tool once. It will extract all of the jobs from the page.
-
-        Return the structured data in JSON format with job listings.
-        """
+        extend_system_message = (
+            'IMPORTANT: For handling dropdowns in job applications:\n\n'
+            '1. For dropdowns with visible labels, use "fill_greenhouse_dropdown" with a SHORT version of the label and option text.\n'
+            '   Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"\n\n'
+            '2. For dropdowns without clear labels, use "handle_custom_dropdown" with the dropdown index and option text.\n\n'
+            'Common dropdown fields and their options:\n'
+            '- Disability Status: "No, I do not have a disability and have not had one in the past"\n'
+            '- Gender: "Male"\n'
+            '- Veteran Status: "I am not a protected veteran"\n'
+            '- Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"\n'
+            '- Current Clearance Level: "N/A - have never held U.S. security clearance"\n\n'
+            'If a dropdown action fails after 2 attempts, try scrolling down and looking for other fields to fill.\n'
+            'DO NOT use the standard select_dropdown_option action as it will not work with these custom UI components.'
+        )
         
         # Initial actions for the agent
         initial_actions = [
@@ -488,106 +495,117 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
         logger.info("Browser closed after scraping job listings")
 
 # Job application function
-async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, Any]) -> Tuple[bool, str]:
+async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, Any], browser, browser_context) -> Tuple[bool, str, BrowserContext]:
     """Apply to a single job and return success status and notes."""
     logger.info(f"Starting application for: {job.title} at {job.company}")
     
     # Create browser instance
-    browser = Browser(
-        config=BrowserConfig(
-            chrome_instance_path=CHROME_PATH,
+    if browser is None:
+        browser = Browser(
+            config=BrowserConfig(
+                chrome_instance_path=CHROME_PATH,
+            )
         )
-    )
     
     try:
         # Define the dropdown-specific extend system message
         extend_system_message = (
-            'For Greenhouse.io applications, use these known dropdown options for faster filling:\n'
-            '- Disability Status: "Yes, I have a disability, or have had one in the past", "No, I do not have a disability and have not had one in the past", "I do not want to answer"\n'
-            '- Gender: "Male", "Female", "Non-binary", "I do not wish to answer"\n'
-            '- Veteran Status: "I identify as one or more of the classifications of protected veteran listed above", "I am not a protected veteran", "I don\'t wish to answer"\n'
-            'Always check for these exact wordings first before using other approaches.'
+            'IMPORTANT: For handling dropdowns in job applications:\n\n'
+            '1. For dropdowns with visible labels, use "fill_greenhouse_dropdown" with a SHORT version of the label and option text.\n'
+            '   Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"\n\n'
+            '2. For dropdowns without clear labels, use "handle_custom_dropdown" with the dropdown index and option text.\n\n'
+            'Common dropdown fields and their options:\n'
+            '- Disability Status: "No, I do not have a disability and have not had one in the past"\n'
+            '- Gender: "Male"\n'
+            '- Veteran Status: "I am not a protected veteran"\n'
+            '- Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"\n'
+            '- Current Clearance Level: "N/A - have never held U.S. security clearance"\n\n'
+            'If a dropdown action fails after 2 attempts, try scrolling down and looking for other fields to fill.\n'
+            'DO NOT use the standard select_dropdown_option action as it will not work with these custom UI components.'
         )
         
         # Initial actions for the agent
         initial_actions = [
             {'open_tab': {'url': job.link}},
-            {'scroll_down': {'amount': 4200}},  # Initial scroll to see the form
+            {'scroll_down': {'amount': 3200}},  # Initial scroll to see the form
         ]
         
         async with await browser.new_context() as browser_context:
-            # Reset dropdown tracking before starting
-            reset_dropdown_tracking()
             
-            # STEP 1: First agent run - for dropdowns only
-            logger.info("Starting first agent run - dropdown fields only")
-            dropdown_task = f"""
+            # STEP 1: Combined form filling agent - handles both dropdowns and text fields
+            logger.info("Starting combined form filling agent - handling all form fields")
+            combined_task = f"""
             You are applying for the job: {job.title} at {job.company} in {job.location}.
             
-            Use the resume information provided to fill out the application form. Only fill in the dropdown fields for now.
+            Use the resume information provided to fill out the application form completely.
+            Fill in BOTH dropdown fields AND text fields in a single pass.
             
-            Make sure to read through the resume data carefully before starting to fill out the form. 
-            Skip the attach/submit buttons as well.
+            IMPORTANT INSTRUCTIONS:
             
-            IMPORTANT: For each dropdown, identify it first, then select the appropriate value from the options. 
-            If you find yourself trying to interact with the same dropdown multiple times, try moving on to the next one.
+            For dropdown fields:
+            1. Use SHORT versions of field labels with "fill_greenhouse_dropdown"
+               Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"
+            2. If that fails, try "handle_custom_dropdown" with the dropdown index
+            3. If a dropdown is giving you trouble after 2 attempts, move on to other fields and come back later
+            4. DO NOT use the standard select_dropdown_option action
+            
+            For text fields:
+            1. Fill in all text input fields with appropriate information from the resume
+            2. Common fields include name, email, phone, address, work experience, education, etc.
+            3. IMPORTANT: Make sure to fill in LinkedIn profile and website fields if present
+               - For LinkedIn, use the full URL from the resume
+               - For website, use the personal website or GitHub URL from the resume
+            
+            Common dropdown fields and their typical values:
+            - Disability Status: "No, I do not have a disability and have not had one in the past"
+            - Gender: "Male" (adjust based on applicant)
+            - Veteran Status: "I am not a protected veteran"
+            - Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"
+            - Current Clearance Level: "N/A - have never held U.S. security clearance"
+            
+            IMPORTANT: DO NOT:
+            - Do not upload resume/cover letter (this will be handled separately)
+            - Do not click submit buttons
+            - Do not click on links that navigate away from the form
+            
+            FIELD PRIORITY ORDER:
+            1. Basic information (name, email, phone)
+            2. LinkedIn profile and website (don't skip these!)
+            3. Dropdown fields (clearance, gender, etc.)
+            4. Work experience (if having trouble with these, try again after filling other fields)
+            
+            Make sure to read through the resume data carefully before starting to fill out the form.
             """
             
-            dropdown_agent = Agent(
-                task=dropdown_task,
+            combined_agent = Agent(
+                task=combined_task,
                 llm=llm_gemini,
                 initial_actions=initial_actions,
                 message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
                 max_input_tokens=128000,  # Ensure enough tokens for resume data
                 browser=browser,
                 browser_context=browser_context,
-                extend_system_message=extend_system_message
+                extend_system_message=extend_system_message,
+                controller=controller_dropdown
             )
             
-            await dropdown_agent.run()
-            logger.info("Dropdown fields completed, now uploading resume...")
+            await combined_agent.run()
+            logger.info("Form fields completed, now uploading resume...")
             
             # STEP 2: Resume upload agent (uses OpenAI LLM)
-            resume_task = "Just upload the resume by using the upload_resume controller option. Attach resume. Don't do anything else. Just attach the resume."
+            resume_task = "Just upload the resume by using the upload_resume controller option. Attach resume. Don't do anything else. Skip the cover letter. Don't click other buttons. Just attach the resume."
             
             resume_agent = Agent(
                 task=resume_task,
                 llm=llm_openai,  # Using OpenAI specifically for resume upload
                 controller=controller,
-                initial_actions=[{'scroll_up': {'amount': 5000}}],
+                initial_actions=[{'scroll_up': {'amount': 4000}}],
                 browser=browser,
                 browser_context=browser_context
             )
             
             await resume_agent.run()
             logger.info("Resume uploaded successfully")
-            
-            # Reset tracking for the text fields
-            reset_dropdown_tracking()
-            
-            # STEP 3: Text fields agent
-            text_task = f"""
-            You are applying for the job: {job.title} at {job.company} in {job.location}.
-            
-            Only fill in the text fields. Don't do anything else. Don't click on dropdowns/buttons/links.
-            Just fill in the text fields (think Name, email, phone, etc.)
-            
-            Make sure to read through the resume data carefully to fill in the appropriate information.
-            DO NOT submit the application - pause at the final step for manual review.
-            """
-            
-            text_agent = Agent(
-                task=text_task,
-                llm=llm_gemini,
-                initial_actions=[{'scroll_up': {'amount': 5000}}],
-                message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
-                max_input_tokens=128000,
-                browser=browser,
-                browser_context=browser_context,
-            )
-            
-            await text_agent.run()
-            logger.info("Text fields completed successfully")
             
             # Prompt for manual review
             print(f"\n\n{'='*80}")
@@ -596,12 +614,185 @@ async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, 
             success = input("Was the application filled out correctly? (y/n): ").lower().startswith('y')
             notes = input("Additional notes for this application: ")
             
-            return success, notes
+            return success, notes, browser_context
     
     finally:
         # Close the browser
         await browser.close()
         logger.info(f"Browser closed after application to {job.title}")
+
+# Add a new function to handle the parallel job applications with review
+async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_data):
+    """Apply to multiple jobs in parallel with manual review."""
+    if not jobs_list:
+        print("No jobs to apply to.")
+        return
+    
+    # Show jobs that will be processed
+    print(f"\nPreparing to apply to {len(jobs_list)} jobs:")
+    for i, job in enumerate(jobs_list, 1):
+        print(f"{i}. {job.title} at {job.company} - {job.location}")
+    
+    confirm = input("\nProceed with applications? (y/n): ")
+    if not confirm.lower().startswith('y'):
+        return
+    
+    # Create a single browser instance for all jobs
+    browser = Browser(
+        config=BrowserConfig(
+            disable_security=True,
+            headless=False,
+            new_context_config=BrowserContextConfig(save_recording_path='./tmp/recordings'),
+        )
+    )
+    
+    try:
+        # Create application tasks for each job
+        application_tasks = []
+        
+        for i, job in enumerate(jobs_list, 1):
+            # Create a browser context for this job
+            browser_context = await browser.new_context()
+            
+            # Create an application task using apply_to_job
+            task = apply_to_job(job, llm_gemini, llm_openai, resume_data, browser, browser_context)
+            application_tasks.append(task)
+        
+        print("\nStarting job applications in parallel. Please wait...")
+        
+        # Run all application tasks in parallel
+        application_results = await asyncio.gather(*application_tasks)
+        
+        print("\n" + "="*50)
+        print("APPLICATION REVIEW PHASE")
+        print("="*50)
+        print("All applications have been filled out and are ready for review.")
+        
+        # Review and submit applications
+        for i, (job, result) in enumerate(zip(jobs_list, application_results), 1):
+            success, notes, browser_context = result
+            
+            print(f"\n{i}. {job.title} at {job.company}")
+            
+            if success:
+                submit_choice = input(f"   Submit application {i}? (y/n): ").lower()
+                
+                if submit_choice.startswith('y'):
+                    # Create a submission agent
+                    submit_task = f"""
+                    You are submitting an application for: {job.title} at {job.company}.
+                    
+                    Find and click the submit/apply button to complete the application process.
+                    Report back when the submission is complete.
+                    """
+                    
+                    submit_agent = Agent(
+                        task=submit_task,
+                        llm=llm_gemini,
+                        browser=browser,
+                        browser_context=browser_context
+                    )
+                    
+                    # Run the submission agent
+                    print(f"   Submitting application {i}...")
+                    await submit_agent.run()
+                    
+                    # Move job to applied CSV
+                    move_job_between_csvs(
+                        job=job,
+                        source_csv=TO_APPLY_CSV,
+                        target_csv=APPLIED_CSV,
+                        new_status="applied",
+                        notes="Submitted through automated process"
+                    )
+                    print(f"   ✅ Application {i} submitted successfully!")
+                else:
+                    print(f"   ❌ Application {i} not submitted")
+                    
+                    # Update notes for this job
+                    additional_notes = input(f"   Add notes for why this application wasn't submitted (or press Enter to skip): ")
+                    if additional_notes:
+                        # Get all jobs from the CSV
+                        jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)
+                        
+                        # Find and update the job
+                        for j in jobs_to_apply:
+                            if j.link == job.link:
+                                if j.notes:
+                                    j.notes += " | " + additional_notes
+                                else:
+                                    j.notes = additional_notes
+                        
+                        # Write back to the CSV
+                        write_jobs_to_csv(jobs_to_apply, TO_APPLY_CSV)
+                        print(f"   Notes added to job {i}")
+            else:
+                print(f"   ❌ Application {i} failed: {notes}")
+                
+                # Update notes for this job
+                additional_notes = input(f"   Add additional notes for this failed application (or press Enter to skip): ")
+                if additional_notes:
+                    # Get all jobs from the CSV
+                    jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)
+                    
+                    # Find and update the job
+                    for j in jobs_to_apply:
+                        if j.link == job.link:
+                            if j.notes:
+                                j.notes += " | " + additional_notes
+                            else:
+                                j.notes = additional_notes
+                    
+                    # Write back to the CSV
+                    write_jobs_to_csv(jobs_to_apply, TO_APPLY_CSV)
+                    print(f"   Notes added to job {i}")
+        
+        print("\nApplication review complete!")
+    
+    finally:
+        # Close the browser
+        await browser.close()
+        print("\nBrowser closed.")
+
+def create_job_application_agent(job, llm_gemini, llm_openai, resume_data, browser, job_index):
+    """Create an agent that will handle the entire job application process."""
+    
+    # Create a comprehensive task for the agent
+    application_task = f"""
+    You are applying for the job: {job.title} at {job.company} in {job.location}.
+    
+    Follow these steps in order:
+    
+    1. Go to the job application URL: {job.link}
+    2. Fill out all form fields using the resume data provided
+       - For dropdown fields, select the most appropriate option
+       - For text fields, enter the relevant information from the resume
+    3. Upload the resume when prompted (use the upload_resume controller action)
+    4. DO NOT submit the application - pause at the final step for manual review
+    
+    IMPORTANT NOTES:
+    - Use the resume data to fill out all fields accurately
+    - If you encounter a field not covered by the resume data, use reasonable defaults
+    - For Greenhouse.io applications, common dropdown options include:
+      * Disability Status: "No, I do not have a disability and have not had one in the past"
+      * Gender: "Male" 
+      * Veteran Status: "I am not a protected veteran"
+    
+    When you're done, clearly indicate that the application is ready for review.
+    """
+    
+    # Create the agent
+    agent = Agent(
+        task=application_task,
+        llm=llm_gemini,
+        initial_actions=[{'open_tab': {'url': job.link}}],
+        message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
+        max_input_tokens=128000,  # Ensure enough tokens for resume data
+        browser=browser,
+        controller=controller,  # Use the custom controller with resume upload
+    )
+    
+    return agent
 
 # Main application function
 async def main():
@@ -645,7 +836,7 @@ async def main():
         print("JOB APPLICATION TRACKER")
         print("="*50)
         print("1. Scrape new job listings")
-        print("2. Apply to first 5 jobs (in parallel)")
+        print("2. Apply to jobs in parallel")
         print("3. View jobs to apply")
         print("4. View applied jobs")
         print("5. Exit")
@@ -657,48 +848,37 @@ async def main():
             jobs = await scrape_job_listings(url, llm_gemini)  # Use Gemini for scraping
         
         elif choice == "2":
-            # Apply to first 5 jobs in parallel
-            jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)[:5]
+            # Apply to jobs in parallel with custom count
+            jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)
             
             if not jobs_to_apply:
                 print("No jobs to apply to. Scrape some jobs first.")
                 continue
             
-            print(f"Preparing to apply to {len(jobs_to_apply)} jobs:")
-            for i, job in enumerate(jobs_to_apply, 1):
-                print(f"{i}. {job.title} at {job.company} - {job.location}")
+            # Show total available jobs
+            print(f"\nThere are {len(jobs_to_apply)} jobs available to apply to.")
             
-            confirm = input("\nProceed with applications? (y/n): ")
-            if not confirm.lower().startswith('y'):
-                continue
-            
-            # Use asyncio.gather to run applications in parallel
-            application_results = await asyncio.gather(
-                *[apply_to_job(job, llm_gemini, llm_openai, resume_data) for job in jobs_to_apply]
-            )
-            
-            # Process results
-            for job, result_tuple in zip(jobs_to_apply, application_results):
-                success, notes = result_tuple
-                if success:
-                    move_job_between_csvs(
-                        job=job,
-                        source_csv=TO_APPLY_CSV,
-                        target_csv=APPLIED_CSV,
-                        new_status="applied",
-                        notes=notes
-                    )
-                    print(f"Successfully applied to: {job.title} at {job.company}")
-                else:
-                    # Update status for failed jobs
-                    failed_jobs = read_jobs_from_csv(TO_APPLY_CSV)
-                    for j in failed_jobs:
-                        if j.link == job.link:
-                            j.notes = notes
-                            j.status = "failed"
+            # Ask for number of jobs to process
+            while True:
+                try:
+                    num_jobs = input(f"How many jobs would you like to apply to? (1-{len(jobs_to_apply)}, default=5): ")
+                    if not num_jobs:
+                        num_jobs = 5  # Default value
+                    else:
+                        num_jobs = int(num_jobs)
                     
-                    write_jobs_to_csv(failed_jobs, TO_APPLY_CSV)
-                    print(f"Failed to apply to: {job.title} at {job.company}")
+                    if 1 <= num_jobs <= len(jobs_to_apply):
+                        break
+                    else:
+                        print(f"Please enter a number between 1 and {len(jobs_to_apply)}.")
+                except ValueError:
+                    print("Please enter a valid number.")
+            
+            # Get the specified number of jobs
+            selected_jobs = jobs_to_apply[:num_jobs]
+            
+            # Apply to the selected jobs
+            await apply_to_jobs_in_parallel(selected_jobs, llm_gemini, llm_openai, resume_data)
         
         elif choice == "3":
             # View jobs to apply
@@ -737,6 +917,285 @@ async def main():
         
         else:
             print("Invalid option. Please try again.")
+
+@controller_dropdown.action('Fill Greenhouse dropdown field')
+async def fill_greenhouse_dropdown(field_label: str, option_text: str, browser: BrowserContext):
+    """
+    Fill a Greenhouse.io dropdown field by its label and option text.
+    
+    Args:
+        field_label: The label text of the field (e.g., "Gender", "Veteran Status")
+        option_text: The text of the option to select
+        browser: The browser context
+    """
+    logger.info(f"Filling Greenhouse dropdown: {field_label} with value: {option_text}")
+    
+    try:
+        page = await browser.get_current_page()
+        
+        # Step 1: Find the dropdown container by its label (using partial text match)
+        # Create a shorter version of the label for matching
+        short_label = field_label.split(' - ')[0] if ' - ' in field_label else field_label
+        if len(short_label) > 30:
+            short_label = short_label[:30]  # Use first 30 chars for very long labels
+        
+        label_selector = f"label:text-matches('{short_label}', 'i')"
+        label_elements = await page.query_selector_all(label_selector)
+        
+        if not label_elements:
+            # Try a more general approach
+            all_labels = await page.query_selector_all('label')
+            label_element = None
+            
+            for label in all_labels:
+                text = await label.text_content()
+                if text and short_label.lower() in text.lower():
+                    label_element = label
+                    break
+                    
+            if not label_element:
+                return ActionResult(error=f"Could not find field with label containing '{short_label}'")
+        else:
+            label_element = label_elements[0]
+        
+        # Get the ID from the label's for attribute
+        field_id = await label_element.get_attribute('for')
+        
+        # Step 2: Click the dropdown to open it
+        if field_id:
+            dropdown_selector = f"#{field_id}"
+            dropdown = await page.query_selector(dropdown_selector)
+        else:
+            # Try to find the dropdown near the label
+            dropdown = await label_element.evaluate('el => el.closest(".field")?.querySelector(".select-selected, [role=combobox], select, .dropdown")')
+        
+        if not dropdown:
+            # Try to find any clickable element near the label
+            dropdown = await label_element.evaluate('el => el.closest(".field")?.querySelector("div[class*=select], div[class*=dropdown], button")')
+        
+        if not dropdown:
+            return ActionResult(error=f"Could not find dropdown for field '{short_label}'")
+        
+        await dropdown.click()
+        await asyncio.sleep(0.5)  # Small delay to let the dropdown open
+        
+        # Step 3: Find and click the option
+        option_selectors = [
+            f"div[role='option']:text-matches('{option_text}', 'i')",
+            f"li[role='option']:text-matches('{option_text}', 'i')",
+            f".select-items div:text-matches('{option_text}', 'i')",
+            f".dropdown-menu li:text-matches('{option_text}', 'i')"
+        ]
+        
+        for selector in option_selectors:
+            try:
+                options = await page.query_selector_all(selector)
+                if options:
+                    await options[0].click()
+                    logger.info(f"Selected '{option_text}' for field '{short_label}'")
+                    return ActionResult(
+                        extracted_content=f"Selected '{option_text}' for field '{short_label}'",
+                        include_in_memory=True
+                    )
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {str(e)}")
+        
+        # If we get here, try a more general approach - find any element containing the option text
+        all_elements = await page.query_selector_all('div, li, span')
+        for element in all_elements:
+            try:
+                text = await element.text_content()
+                if text and option_text.lower() in text.lower():
+                    await element.click()
+                    logger.info(f"Selected element with text '{text}'")
+                    return ActionResult(
+                        extracted_content=f"Selected element with text '{text}' from dropdown",
+                        include_in_memory=True
+                    )
+            except Exception:
+                continue
+        
+        return ActionResult(
+            error=f"Could not find option '{option_text}' for field '{short_label}'",
+            include_in_memory=True
+        )
+        
+    except Exception as e:
+        error_msg = f"Error filling Greenhouse dropdown: {str(e)}"
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
+
+@controller_dropdown.action('Handle custom dropdown selection (for React/modern dropdowns)')
+async def handle_custom_dropdown(dropdown_index: int, option_text: str, browser: BrowserContext):
+    """
+    Handle selection in modern custom dropdowns (like React Select) that aren't standard HTML select elements.
+    
+    Args:
+        dropdown_index: The index of the dropdown trigger element
+        option_text: The text of the option to select
+        browser: The browser context
+    """
+    logger.info(f"Handling custom dropdown at index {dropdown_index}, selecting '{option_text}'")
+    
+    try:
+        # Step 1: Click the dropdown to open it
+        dom_el = await browser.get_dom_element_by_index(dropdown_index)
+        if dom_el is None:
+            return ActionResult(error=f"No element found at index {dropdown_index}")
+        
+        dropdown_el = await browser.get_locate_element(dom_el)
+        if dropdown_el is None:
+            return ActionResult(error=f"Could not locate dropdown element at index {dropdown_index}")
+        
+        # Click to open the dropdown
+        await dropdown_el.click()
+        await asyncio.sleep(1.0)  # Longer delay to let the dropdown open fully
+        
+        # Step 2: Find and click the option with matching text
+        page = await browser.get_current_page()
+        
+        # Try different selectors that are commonly used for dropdown options
+        option_selectors = [
+            f"div[role='option']:text-matches('{option_text}', 'i')",
+            f"li[role='option']:text-matches('{option_text}', 'i')",
+            f".select__option:text-matches('{option_text}', 'i')",
+            f"[id*='react-select'][id*='option']:text-matches('{option_text}', 'i')",
+            f".select-items div:text-matches('{option_text}', 'i')",
+            f".dropdown-menu li:text-matches('{option_text}', 'i')"
+        ]
+        
+        for selector in option_selectors:
+            try:
+                options = await page.query_selector_all(selector)
+                if options:
+                    await options[0].click()
+                    logger.info(f"Successfully selected option '{option_text}' from dropdown")
+                    return ActionResult(
+                        extracted_content=f"Selected '{option_text}' from dropdown at index {dropdown_index}",
+                        include_in_memory=True
+                    )
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {str(e)}")
+        
+        # If specific selectors fail, try a more general approach
+        # Look for any visible element that contains the option text
+        all_elements = await page.query_selector_all('div, li, span')
+        for element in all_elements:
+            try:
+                text = await element.text_content()
+                if text and option_text.lower() in text.lower():
+                    is_visible = await element.is_visible()
+                    if is_visible:
+                        await element.click()
+                        logger.info(f"Selected element with text '{text}'")
+                        return ActionResult(
+                            extracted_content=f"Selected element with text '{text}' from dropdown",
+                            include_in_memory=True
+                        )
+            except Exception:
+                continue
+        
+        # If we get here, we couldn't find the option
+        return ActionResult(
+            error=f"Could not find option '{option_text}' in the dropdown",
+            include_in_memory=True
+        )
+        
+    except Exception as e:
+        error_msg = f"Error handling custom dropdown: {str(e)}"
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
+
+@controller_dropdown.action('Fill profile URLs (LinkedIn/Website)')
+async def fill_profile_urls(linkedin_url: str, website_url: str, browser: BrowserContext):
+    """
+    Fill LinkedIn and website fields by finding them based on their labels.
+    
+    Args:
+        linkedin_url: The LinkedIn profile URL
+        website_url: The website URL (GitHub or personal site)
+        browser: The browser context
+    """
+    logger.info(f"Filling profile URLs: LinkedIn={linkedin_url}, Website={website_url}")
+    
+    try:
+        page = await browser.get_current_page()
+        
+        # Find LinkedIn field
+        linkedin_selectors = [
+            "input[id*='linkedin' i]",
+            "input[name*='linkedin' i]",
+            "input[placeholder*='linkedin' i]",
+            "label:text-matches('LinkedIn', 'i') + input",
+            "label:text-matches('LinkedIn', 'i')"
+        ]
+        
+        linkedin_field = None
+        for selector in linkedin_selectors:
+            try:
+                elements = await page.query_selector_all(selector)
+                if elements:
+                    linkedin_field = elements[0]
+                    break
+            except Exception:
+                continue
+                
+        if linkedin_field:
+            # If we found a label, get the associated input
+            if await linkedin_field.evaluate('el => el.tagName.toLowerCase()') == 'label':
+                field_id = await linkedin_field.get_attribute('for')
+                if field_id:
+                    linkedin_field = await page.query_selector(f"#{field_id}")
+                else:
+                    # Try to find the input near the label
+                    linkedin_field = await linkedin_field.evaluate('el => el.closest(".field")?.querySelector("input")')
+            
+            if linkedin_field:
+                await linkedin_field.fill(linkedin_url)
+                logger.info(f"Successfully filled LinkedIn URL: {linkedin_url}")
+        
+        # Find Website field
+        website_selectors = [
+            "input[id*='website' i]",
+            "input[name*='website' i]",
+            "input[placeholder*='website' i]",
+            "label:text-matches('Website', 'i') + input",
+            "label:text-matches('Website', 'i')"
+        ]
+        
+        website_field = None
+        for selector in website_selectors:
+            try:
+                elements = await page.query_selector_all(selector)
+                if elements:
+                    website_field = elements[0]
+                    break
+            except Exception:
+                continue
+                
+        if website_field:
+            # If we found a label, get the associated input
+            if await website_field.evaluate('el => el.tagName.toLowerCase()') == 'label':
+                field_id = await website_field.get_attribute('for')
+                if field_id:
+                    website_field = await page.query_selector(f"#{field_id}")
+                else:
+                    # Try to find the input near the label
+                    website_field = await website_field.evaluate('el => el.closest(".field")?.querySelector("input")')
+            
+            if website_field:
+                await website_field.fill(website_url)
+                logger.info(f"Successfully filled Website URL: {website_url}")
+        
+        return ActionResult(
+            extracted_content=f"Filled LinkedIn URL: {linkedin_url if linkedin_field else 'Not found'}, Website URL: {website_url if website_field else 'Not found'}",
+            include_in_memory=True
+        )
+        
+    except Exception as e:
+        error_msg = f"Error filling profile URLs: {str(e)}"
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
 
 if __name__ == "__main__":
     asyncio.run(main()) 
