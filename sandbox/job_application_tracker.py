@@ -406,11 +406,13 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
     # Create browser instance
     browser = Browser(
         config=BrowserConfig(
-            chrome_instance_path=CHROME_PATH,
-            new_context_config=BrowserContextConfig(
-                viewport_expansion=500,
-            ),
-        ),
+            disable_security=True,
+            headless=False,
+            extra_chromium_args=[
+                "--force-dark-mode",
+                "--enable-features=WebContentsForceDark"
+            ]
+        )
     )
     # https://www.anduril.com/open-roles/?location=&department=Software&search=&gh_src=
     try:
@@ -550,7 +552,7 @@ async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, 
         
         # Initial actions for the agent - add a pause at the beginning
         initial_actions = [
-            {'open_tab': {'url': job.link}},
+            {'go_to_url': {'url': job.link}},
             {'scroll_down': {'amount': 3200}},  # Initial scroll to see the form
         ]
         
