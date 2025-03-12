@@ -184,8 +184,9 @@ gcp-login.json
 .idea
 *.txt
 *.pdf
-*.csv
 *.json
 *.jsonl
 
 uv.lock
+
+darkreader-extension/

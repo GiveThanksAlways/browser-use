@@ -74,7 +74,7 @@ class JobListing(BaseModel):
     job_title: str = Field(description="The title of the job position")
     apply_link: str = Field(description="URL link to apply for the job")
     company_name: str = Field(
-        default="Anduril Industries",
+        default="Company ABC",
         description="The name of the company offering the job"
     )
     location: Optional[str] = Field(
@@ -227,6 +227,33 @@ async def extract_job_listings_chunked(goal: str, browser: BrowserContext, page_
     # Print a sample of the content for debugging
     logger.debug(f"Sample content: {content[:500]}")
     
+    # Get the company name from the page title or URL
+    company_name = "Unknown Company"
+    try:
+        page_title = await page.title()
+        page_url = page.url
+        
+        # Try to extract company name from title
+        if "careers" in page_title.lower() or "jobs" in page_title.lower():
+            title_parts = page_title.split(" - ") or page_title.split(" | ")
+            if len(title_parts) > 1:
+                company_name = title_parts[0].strip()
+        
+        # If still unknown, try from URL
+        if company_name == "Unknown Company" and page_url:
+            # Extract domain from URL
+            from urllib.parse import urlparse
+            domain = urlparse(page_url).netloc
+            domain_parts = domain.split('.')
+            if len(domain_parts) > 1 and domain_parts[0] != "www":
+                company_name = domain_parts[0].capitalize()
+            elif len(domain_parts) > 2 and domain_parts[0] == "www":
+                company_name = domain_parts[1].capitalize()
+    
+        logger.info(f"Detected company name: {company_name}")
+    except Exception as e:
+        logger.warning(f"Could not detect company name: {str(e)}")
+    
     # Define chunking parameters
     chunk_size = 10000  # Characters per chunk
     max_chunks = 10     # Maximum number of chunks to process
@@ -339,7 +366,7 @@ async def extract_job_listings_chunked(goal: str, browser: BrowserContext, page_
                                 valid_job = JobListing(
                                     job_title=job.get("job_title"),
                                     apply_link=job.get("apply_link"),
-                                    company_name="Anduril Industries",
+                                    company_name=company_name,
                                     location=job.get("location", ""),
                                     description=job.get("description", "")
                                 )
@@ -499,16 +526,11 @@ async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, 
     """Apply to a single job and return success status and notes."""
     logger.info(f"Starting application for: {job.title} at {job.company}")
     
-    # Create browser instance
     if browser is None:
-        browser = Browser(
-            config=BrowserConfig(
-                chrome_instance_path=CHROME_PATH,
-            )
-        )
+        raise ValueError("Browser instance is required for apply_to_job function.")
     
     try:
-        # Define the dropdown-specific extend system message
+        # Define the dropdown-specific extend system message with limited retry instructions
         extend_system_message = (
             'IMPORTANT: For handling dropdowns in job applications:\n\n'
             '1. For dropdowns with visible labels, use "fill_greenhouse_dropdown" with a SHORT version of the label and option text.\n'
@@ -520,106 +542,151 @@ async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, 
             '- Veteran Status: "I am not a protected veteran"\n'
             '- Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"\n'
             '- Current Clearance Level: "N/A - have never held U.S. security clearance"\n\n'
-            'If a dropdown action fails after 2 attempts, try scrolling down and looking for other fields to fill.\n'
-            'DO NOT use the standard select_dropdown_option action as it will not work with these custom UI components.'
+            'IMPORTANT: If a dropdown action fails after 1 attempt, move on to other fields.\n'
+            'If you cannot find any dropdown fields after 2 scroll attempts, assume they are not present and continue with other tasks.\n'
+            'DO NOT use the standard select_dropdown_option action as it will not work with these custom UI components.\n\n'
+            'CRITICAL: NEVER CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR. DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM.'
         )
         
-        # Initial actions for the agent
+        # Initial actions for the agent - add a pause at the beginning
         initial_actions = [
             {'open_tab': {'url': job.link}},
             {'scroll_down': {'amount': 3200}},  # Initial scroll to see the form
         ]
         
-        async with await browser.new_context() as browser_context:
+        # Use the provided browser context or create a new one if needed
+        if browser_context is None and browser is not None:
+            browser_context = await browser.new_context()
+            context_created_internally = True
+        else:
+            context_created_internally = False
             
-            # STEP 1: Combined form filling agent - handles both dropdowns and text fields
-            logger.info("Starting combined form filling agent - handling all form fields")
-            combined_task = f"""
-            You are applying for the job: {job.title} at {job.company} in {job.location}.
-            
-            Use the resume information provided to fill out the application form completely.
-            Fill in BOTH dropdown fields AND text fields in a single pass.
-            
-            IMPORTANT INSTRUCTIONS:
-            
-            For dropdown fields:
-            1. Use SHORT versions of field labels with "fill_greenhouse_dropdown"
-               Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"
-            2. If that fails, try "handle_custom_dropdown" with the dropdown index
-            3. If a dropdown is giving you trouble after 2 attempts, move on to other fields and come back later
-            4. DO NOT use the standard select_dropdown_option action
-            
-            For text fields:
-            1. Fill in all text input fields with appropriate information from the resume
-            2. Common fields include name, email, phone, address, work experience, education, etc.
-            3. IMPORTANT: Make sure to fill in LinkedIn profile and website fields if present
-               - For LinkedIn, use the full URL from the resume
-               - For website, use the personal website or GitHub URL from the resume
-            
-            Common dropdown fields and their typical values:
-            - Disability Status: "No, I do not have a disability and have not had one in the past"
-            - Gender: "Male" (adjust based on applicant)
-            - Veteran Status: "I am not a protected veteran"
-            - Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"
-            - Current Clearance Level: "N/A - have never held U.S. security clearance"
-            
-            IMPORTANT: DO NOT:
-            - Do not upload resume/cover letter (this will be handled separately)
-            - Do not click submit buttons
-            - Do not click on links that navigate away from the form
-            
-            FIELD PRIORITY ORDER:
-            1. Basic information (name, email, phone)
-            2. LinkedIn profile and website (don't skip these!)
-            3. Dropdown fields (clearance, gender, etc.)
-            4. Work experience (if having trouble with these, try again after filling other fields)
-            
-            Make sure to read through the resume data carefully before starting to fill out the form.
-            """
-            
-            combined_agent = Agent(
-                task=combined_task,
-                llm=llm_gemini,
-                initial_actions=initial_actions,
-                message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
-                max_input_tokens=128000,  # Ensure enough tokens for resume data
-                browser=browser,
-                browser_context=browser_context,
-                extend_system_message=extend_system_message,
-                controller=controller_dropdown
-            )
-            
-            await combined_agent.run()
-            logger.info("Form fields completed, now uploading resume...")
-            
-            # STEP 2: Resume upload agent (uses OpenAI LLM)
-            resume_task = "Just upload the resume by using the upload_resume controller option. Attach resume. Don't do anything else. Skip the cover letter. Don't click other buttons. Just attach the resume."
-            
-            resume_agent = Agent(
-                task=resume_task,
-                llm=llm_openai,  # Using OpenAI specifically for resume upload
-                controller=controller,
-                initial_actions=[{'scroll_up': {'amount': 4000}}],
-                browser=browser,
-                browser_context=browser_context
-            )
-            
-            await resume_agent.run()
-            logger.info("Resume uploaded successfully")
-            
-            # Prompt for manual review
-            print(f"\n\n{'='*80}")
-            print(f"APPLICATION READY FOR REVIEW: {job.title} at {job.company}")
-            print(f"{'='*80}")
-            success = input("Was the application filled out correctly? (y/n): ").lower().startswith('y')
-            notes = input("Additional notes for this application: ")
-            
-            return success, notes, browser_context
+        # STEP 1: Combined form filling agent - handles both dropdowns and text fields
+        logger.info("Starting combined form filling agent - handling all form fields")
+        combined_task = f"""
+        You are applying for the job: {job.title} at {job.company} in {job.location}.
+        
+        Use the resume information provided to fill out the application form completely.
+        Fill in BOTH dropdown fields AND text fields in a single pass.
+        
+        IMPORTANT INSTRUCTIONS:
+        
+        For dropdown fields:
+        1. Use SHORT versions of field labels with "fill_greenhouse_dropdown"
+           Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"
+        2. If that fails, try "handle_custom_dropdown" with the dropdown index
+        3. IMPORTANT: If a dropdown is giving you trouble after 1 attempt, move on to other fields
+        4. If you cannot find any dropdown fields after 2 scroll attempts, assume they are not present and continue
+        5. DO NOT use the standard select_dropdown_option action
+        
+        For text fields:
+        1. Fill in all text input fields with appropriate information from the resume
+        2. Common fields include name, email, phone, address, work experience, education, etc.
+        3. IMPORTANT: Make sure to fill in LinkedIn profile and website fields if present
+           - For LinkedIn, use the full URL from the resume
+           - For website, use the personal website or GitHub URL from the resume
+        
+        Common dropdown fields and their typical values:
+        - Disability Status: "No, I do not have a disability and have not had one in the past"
+        - Gender: "Male" (adjust based on applicant)
+        - Veteran Status: "I am not a protected veteran"
+        - Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"
+        - Current Clearance Level: "N/A - have never held U.S. security clearance"
+        
+        CRITICAL RESTRICTIONS - YOU MUST FOLLOW THESE:
+        - DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
+        - DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM
+        - DO NOT CLICK ANY BUTTONS THAT MIGHT SUBMIT THE FORM
+        - DO NOT USE THE click_element ACTION ON ANY BUTTON THAT MIGHT SUBMIT THE FORM
+        - Do not upload resume/cover letter (this will be handled separately)
+        - Do not click on links that navigate away from the form
+        - Do NOT click "Enter manually" buttons - just fill in the fields that are available
+        - Do NOT try to enter work experience in a text area if it's not already visible
+        
+        FIELD PRIORITY ORDER:
+        1. Basic information (name, email, phone)
+        2. LinkedIn profile and website (don't skip these!)
+        3. Work experience fields ONLY if they are already visible text fields
+        4. Dropdown fields (clearance, gender, etc.) - but don't spend too much time on these if they're not working
+        
+        SCROLLING INSTRUCTIONS:
+        - Scroll down in small increments (300-400 pixels at a time)
+        - After scrolling down 3 times, check if you've reached the bottom of the form
+        - If you see a Submit button or the end of the form, STOP scrolling down
+        - Maximum 4 scroll_down actions total - then assume you've seen the whole form
+        
+        ADAPTIVE APPROACH:
+        - If you can't find dropdown fields after 2 attempts, consider the form may not have them
+        - Focus on completing all text fields correctly rather than getting stuck on dropdowns
+        - After 3 failed dropdown attempts total, move on and report success on the fields you did complete
+        - If you can't find a field to enter work experience, just skip it - DO NOT click "Enter manually"
+        
+        Make sure to read through the resume data carefully before starting to fill out the form.
+        
+        FINAL INSTRUCTION: When done filling out the form, use the "done" action with success=true. DO NOT CLICK SUBMIT.
+        """
+        
+        # Set a timeout for the agent to prevent getting stuck
+        combined_agent = Agent(
+            task=combined_task,
+            llm=llm_gemini,
+            initial_actions=initial_actions,
+            message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
+            max_input_tokens=128000,  # Ensure enough tokens for resume data
+            browser=browser,
+            browser_context=browser_context,
+            extend_system_message=extend_system_message,
+            controller=controller_dropdown
+        )
+        
+        await combined_agent.run()
+        logger.info("Form fields completed, now uploading resume...")
+        
+        # STEP 2: Resume upload agent (uses OpenAI LLM)
+        resume_task = """
+        Your ONLY task is to upload the resume using the upload_resume controller action.
+        
+        IMPORTANT:
+        1. First scroll up to find the resume upload section
+        2. Look for the resume upload field (usually near the top of the form)
+        3. Use ONLY the upload_resume controller action to upload the resume
+        4. DO NOT click any buttons labeled 'Attach' or 'Browse' - just use the upload_resume action directly
+        5. DO NOT click any other buttons or links
+        6. Skip the cover letter
+        7. DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
+        8. NEVER use click_element on any button at the bottom of the form
+        
+        EXAMPLE ACTION:
+        {"upload_resume": {"index": 0}}  // Use the appropriate index number
+        
+        Just focus on using the upload_resume controller action directly.
+        
+        FINAL INSTRUCTION: When done uploading the resume, use the "done" action with success=true. DO NOT CLICK SUBMIT.
+        """
+        
+        resume_agent = Agent(
+            task=resume_task,
+            llm=llm_openai,  # Using OpenAI specifically for resume upload
+            controller=controller,
+            initial_actions=[{'scroll_up': {'amount': 4000}}],
+            browser=browser,
+            browser_context=browser_context,
+            extend_system_message='CRITICAL: NEVER CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR. DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM.'
+        )
+        
+        await resume_agent.run()
+        logger.info("Resume upload attempt completed")
+        
+        # Simply log that the application is ready and assume success
+        print(f"Application prepared for: {job.title} at {job.company}")
+        
+        # Return success by default - we'll handle failures at the end
+        return True, "", browser_context
     
-    finally:
-        # Close the browser
-        await browser.close()
-        logger.info(f"Browser closed after application to {job.title}")
+    except Exception as e:
+        logger.error(f"Error during application process: {str(e)}")
+        # Return browser_context even in case of error to maintain type compatibility
+        return False, f"Application failed with error: {str(e)}", browser_context
 
 # Add a new function to handle the parallel job applications with review
 async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_data):
@@ -642,17 +709,22 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
         config=BrowserConfig(
             disable_security=True,
             headless=False,
-            new_context_config=BrowserContextConfig(save_recording_path='./tmp/recordings'),
+            extra_chromium_args=[
+                "--force-dark-mode",
+                "--enable-features=WebContentsForceDark"
+            ]
         )
     )
     
     try:
         # Create application tasks for each job
         application_tasks = []
+        browser_contexts = []
         
         for i, job in enumerate(jobs_list, 1):
             # Create a browser context for this job
-            browser_context = await browser.new_context()
+            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': 1024, 'height': 900}, save_recording_path=f'./tmp/recordings'))
+            browser_contexts.append(browser_context)
             
             # Create an application task using apply_to_job
             task = apply_to_job(job, llm_gemini, llm_openai, resume_data, browser, browser_context)
@@ -663,94 +735,71 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
         # Run all application tasks in parallel
         application_results = await asyncio.gather(*application_tasks)
         
-        print("\n" + "="*50)
+        print("\n" + "="*80)
         print("APPLICATION REVIEW PHASE")
-        print("="*50)
-        print("All applications have been filled out and are ready for review.")
+        print("="*80)
         
-        # Review and submit applications
+        # Display a table of all applications
+        print("\nApplications Summary:")
+        print(f"{'#':<3} {'Company':<25} {'Job Title':<40} {'Status':<10}")
+        print("-" * 80)
+        
         for i, (job, result) in enumerate(zip(jobs_list, application_results), 1):
-            success, notes, browser_context = result
+            success, notes, _ = result
+            status = "✅ Ready" if success else "❌ Failed"
+            print(f"{i:<3} {job.company[:25]:<25} {job.title[:40]:<40} {status:<10}")
+        
+        print("\nPlease review all applications and manually submit them.")
+        print("Look for the 'Submit', 'Apply', or similar button and click it for each application.")
+        input("Press Enter when you've reviewed and submitted all applications...")
+        
+        # Ask once for any failed applications
+        failed_apps = input("\nEnter the numbers of any applications that failed or weren't submitted (comma-separated, or press Enter if all succeeded): ")
+        
+        if failed_apps.strip():
+            # Process failed applications
+            failed_indices = [int(idx.strip()) for idx in failed_apps.split(",") if idx.strip().isdigit()]
+            failed_notes = input("Enter notes for the failed applications (optional): ")
             
-            print(f"\n{i}. {job.title} at {job.company}")
-            
-            if success:
-                submit_choice = input(f"   Submit application {i}? (y/n): ").lower()
-                
-                if submit_choice.startswith('y'):
-                    # Create a submission agent
-                    submit_task = f"""
-                    You are submitting an application for: {job.title} at {job.company}.
-                    
-                    Find and click the submit/apply button to complete the application process.
-                    Report back when the submission is complete.
-                    """
-                    
-                    submit_agent = Agent(
-                        task=submit_task,
-                        llm=llm_gemini,
-                        browser=browser,
-                        browser_context=browser_context
-                    )
-                    
-                    # Run the submission agent
-                    print(f"   Submitting application {i}...")
-                    await submit_agent.run()
-                    
-                    # Move job to applied CSV
+            # Update all other applications as successful
+            for i, (job, _) in enumerate(zip(jobs_list, application_results), 1):
+                if i not in failed_indices:
+                    # Move successful job to applied CSV
                     move_job_between_csvs(
                         job=job,
                         source_csv=TO_APPLY_CSV,
                         target_csv=APPLIED_CSV,
                         new_status="applied",
-                        notes="Submitted through automated process"
+                        notes="Manually submitted through automated process"
                     )
-                    print(f"   ✅ Application {i} submitted successfully!")
+                    print(f"✅ Application {i} marked as submitted successfully!")
                 else:
-                    print(f"   ❌ Application {i} not submitted")
-                    
-                    # Update notes for this job
-                    additional_notes = input(f"   Add notes for why this application wasn't submitted (or press Enter to skip): ")
-                    if additional_notes:
-                        # Get all jobs from the CSV
-                        jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)
-                        
-                        # Find and update the job
-                        for j in jobs_to_apply:
-                            if j.link == job.link:
-                                if j.notes:
-                                    j.notes += " | " + additional_notes
-                                else:
-                                    j.notes = additional_notes
-                        
-                        # Write back to the CSV
-                        write_jobs_to_csv(jobs_to_apply, TO_APPLY_CSV)
-                        print(f"   Notes added to job {i}")
-            else:
-                print(f"   ❌ Application {i} failed: {notes}")
-                
-                # Update notes for this job
-                additional_notes = input(f"   Add additional notes for this failed application (or press Enter to skip): ")
-                if additional_notes:
-                    # Get all jobs from the CSV
+                    # Update notes for failed jobs
                     jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)
-                    
-                    # Find and update the job
                     for j in jobs_to_apply:
                         if j.link == job.link:
                             if j.notes:
-                                j.notes += " | " + additional_notes
+                                j.notes += " | " + failed_notes
                             else:
-                                j.notes = additional_notes
-                    
-                    # Write back to the CSV
+                                j.notes = failed_notes
                     write_jobs_to_csv(jobs_to_apply, TO_APPLY_CSV)
-                    print(f"   Notes added to job {i}")
+                    print(f"❌ Application {i} marked as failed")
+        else:
+            # All applications were successful
+            for job in jobs_list:
+                move_job_between_csvs(
+                    job=job,
+                    source_csv=TO_APPLY_CSV,
+                    target_csv=APPLIED_CSV,
+                    new_status="applied",
+                    notes="Manually submitted through automated process"
+                )
+            print(f"✅ All {len(jobs_list)} applications marked as submitted successfully!")
         
-        print("\nApplication review complete!")
+        print("\nApplication process complete!")
     
     finally:
-        # Close the browser
+        # Close the browser only at the end of the entire process
         await browser.close()
         print("\nBrowser closed.")
 
