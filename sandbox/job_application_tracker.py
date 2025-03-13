@@ -410,7 +410,8 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
             headless=False,
             extra_chromium_args=[
                 "--force-dark-mode",
-                "--enable-features=WebContentsForceDark"
+                "--enable-features=WebContentsForceDark",
+                "--window-size=2100,1000"  # This sets the actual window size of Chrome
             ]
         )
     )
@@ -702,19 +703,27 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
     for i, job in enumerate(jobs_list, 1):
         print(f"{i}. {job.title} at {job.company} - {job.location}")
     
-    confirm = input("\nProceed with applications? (y/n): ")
-    if not confirm.lower().startswith('y'):
+    confirm = input("\nProceed with applications? (Press Enter to continue, or 'n' to cancel): ")
+    if confirm.lower().startswith('n'):
         return
     
     # Create a single browser instance for all jobs
+    viewport_width, viewport_height = 1000, 1000
+    start_x, start_y = 1920, 0
     browser = Browser(
         config=BrowserConfig(
             disable_security=True,
             headless=False,
             extra_chromium_args=[
                 "--force-dark-mode",
-                "--enable-features=WebContentsForceDark"
-            ]
+                "--enable-features=WebContentsForceDark",
+                f"--window-position={start_x},{start_y}",
+                f"--window-size={viewport_width},{viewport_height}"  # This sets the actual window size of Chrome
+            ],
+            new_context_config=BrowserContextConfig(
+                browser_window_size={'width': viewport_width, 'height': viewport_height},
+                save_recording_path=f'./tmp/recordings'
+            )
         )
     )
     
@@ -725,7 +734,7 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
         
         for i, job in enumerate(jobs_list, 1):
             # Create a browser context for this job
-            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': 1024, 'height': 900}, save_recording_path=f'./tmp/recordings'))
+            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': viewport_width, 'height': viewport_height}, save_recording_path=f'./tmp/recordings'))
             browser_contexts.append(browser_context)
             
             # Create an application task using apply_to_job
@@ -741,27 +750,23 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
         print("APPLICATION REVIEW PHASE")
         print("="*80)
         
-        # Display a table of all applications
+        # Display a simplified table with just job title and status
         print("\nApplications Summary:")
-        print(f"{'#':<3} {'Company':<25} {'Job Title':<40} {'Status':<10}")
-        print("-" * 80)
+        print(f"{'#':<3} {'Job Title':<70} {'Status':<10}")
+        print("-" * 85)
         
         for i, (job, result) in enumerate(zip(jobs_list, application_results), 1):
             success, notes, _ = result
             status = "✅ Ready" if success else "❌ Failed"
-            print(f"{i:<3} {job.company[:25]:<25} {job.title[:40]:<40} {status:<10}")
+            print(f"{i:<3} {job.title[:70]:<70} {status:<10}")
         
         print("\nPlease review all applications and manually submit them.")
-        print("Look for the 'Submit', 'Apply', or similar button and click it for each application.")
-        input("Press Enter when you've reviewed and submitted all applications...")
-        
         # Ask once for any failed applications
         failed_apps = input("\nEnter the numbers of any applications that failed or weren't submitted (comma-separated, or press Enter if all succeeded): ")
         
         if failed_apps.strip():
             # Process failed applications
             failed_indices = [int(idx.strip()) for idx in failed_apps.split(",") if idx.strip().isdigit()]
-            failed_notes = input("Enter notes for the failed applications (optional): ")
             
             # Update all other applications as successful
             for i, (job, _) in enumerate(zip(jobs_list, application_results), 1):
@@ -778,12 +783,6 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
                 else:
                     # Update notes for failed jobs
                     jobs_to_apply = read_jobs_from_csv(TO_APPLY_CSV)
-                    for j in jobs_to_apply:
-                        if j.link == job.link:
-                            if j.notes:
-                                j.notes += " | " + failed_notes
-                            else:
-                                j.notes = failed_notes
                     write_jobs_to_csv(jobs_to_apply, TO_APPLY_CSV)
                     print(f"❌ Application {i} marked as failed")
         else:
@@ -912,9 +911,9 @@ async def main():
             # Ask for number of jobs to process
             while True:
                 try:
-                    num_jobs = input(f"How many jobs would you like to apply to? (1-{len(jobs_to_apply)}, default=5): ")
+                    num_jobs = input(f"How many jobs would you like to apply to? (1-{len(jobs_to_apply)}, default=10): ")
                     if not num_jobs:
-                        num_jobs = 5  # Default value
+                        num_jobs = 10  # Default value
                     else:
                         num_jobs = int(num_jobs)
                     
