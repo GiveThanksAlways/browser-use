@@ -201,6 +201,44 @@ async def upload_resume(index: int, browser: BrowserContext):
         logger.error(error_msg)
         return ActionResult(error=error_msg)
 
+@controller.action('Upload portfolio to application form')
+async def upload_portfolio(index: int, browser: BrowserContext):
+    """Upload portfolio to a file upload element at the specified index."""
+    # Define portfolio path
+    PORTFOLIO_PATH = SANDBOX_PATH / 'portfolio-website.txt'
+    
+    # Check if portfolio file exists
+    if not PORTFOLIO_PATH.exists():
+        return ActionResult(error=f'Portfolio file not found at {PORTFOLIO_PATH}')
+    
+    path = str(PORTFOLIO_PATH.absolute())
+    
+    # Get the DOM element at the specified index
+    dom_el = await browser.get_dom_element_by_index(index)
+    if dom_el is None:
+        return ActionResult(error=f'No element found at index {index}')
+    
+    # Get the file upload element
+    file_upload_dom_el = dom_el.get_file_upload_element()
+    if file_upload_dom_el is None:
+        return ActionResult(error=f'No file upload element found at index {index}')
+    
+    # Get the locatable element
+    file_upload_el = await browser.get_locate_element(file_upload_dom_el)
+    if file_upload_el is None:
+        return ActionResult(error=f'Could not locate file upload element at index {index}')
+    
+    try:
+        # Upload the file
+        await file_upload_el.set_input_files(path)
+        success_msg = f'Successfully uploaded portfolio from "{path}" to element at index {index}'
+        logger.info(success_msg)
+        return ActionResult(extracted_content=success_msg, include_in_memory=True)
+    except Exception as e:
+        error_msg = f'Failed to upload portfolio to element at index {index}: {str(e)}'
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
+
 @controller.action('Read resume data for filling forms')
 def get_resume_data():
     """Provide resume data to the agent for form filling."""
@@ -653,29 +691,31 @@ async def apply_to_job(job: Job, llm_gemini, llm_gemini_tool_use, resume_data: D
         
         # STEP 2: Resume upload agent (uses OpenAI LLM)
         resume_task = """
-        Your ONLY task is to upload the resume using the upload_resume controller action.
+        Your task is to upload both the resume and portfolio files using the appropriate controller actions.
         
         IMPORTANT:
-        1. First scroll up to find the resume upload section
+        1. First scroll up to find the file upload sections
         2. Look for the resume upload field (usually near the top of the form)
-        3. Use ONLY the upload_resume controller action to upload the resume
-        4. DO NOT click any buttons labeled 'Attach' or 'Browse' - just use the upload_resume action directly
-        5. DO NOT click any other buttons or links
-        6. Skip the cover letter
-        7. DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
-        8. NEVER use click_element on any button at the bottom of the form
+        3. Use the upload_resume controller action to upload the resume
+        4. Then look for the portfolio/cover letter upload field (usually below the resume field)
+        5. Use the upload_portfolio controller action to upload the portfolio
+        6. DO NOT click any buttons labeled 'Attach' or 'Browse' - just use the controller actions directly
+        7. DO NOT click any other buttons or links
+        8. DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
+        9. NEVER use click_element on any button at the bottom of the form
         
-        EXAMPLE ACTION:
-        {"upload_resume": {"index": 0}}  // Use the appropriate index number
+        EXAMPLE ACTIONS:
+        {"upload_resume": {"index": 0}}  // For resume upload
+        {"upload_portfolio": {"index": 1}}  // For portfolio upload
         
-        Just focus on using the upload_resume controller action directly.
+        Just focus on using the controller actions directly.
         
-        FINAL INSTRUCTION: When done uploading the resume, use the "done" action with success=true. DO NOT CLICK SUBMIT.
+        FINAL INSTRUCTION: When done uploading both files, use the "done" action with success=true. DO NOT CLICK SUBMIT.
         """
         
         resume_agent = Agent(
             task=resume_task,
-            llm=llm_gemini_tool_use,  # Using OpenAI specifically for resume upload
+            llm=llm_gemini_tool_use,
             controller=controller,
             initial_actions=[{'scroll_up': {'amount': 4000}}],
             browser=browser,
@@ -1092,7 +1132,7 @@ async def fill_greenhouse_dropdown(field_label: str, option_text: str, browser: 
 @controller_dropdown.action('Handle custom dropdown selection (for React/modern dropdowns)')
 async def handle_custom_dropdown(dropdown_index: int, option_text: str, browser: BrowserContext):
     """
-    Handle selection in modern custom dropdowns (like React Select) that aren't standard HTML select elements.
+    Handle selection in modern custom dropdowns (like React Select or Select2) that aren't standard HTML select elements.
     
     Args:
         dropdown_index: The index of the dropdown trigger element
@@ -1102,7 +1142,9 @@ async def handle_custom_dropdown(dropdown_index: int, option_text: str, browser:
     logger.info(f"Handling custom dropdown at index {dropdown_index}, selecting '{option_text}'")
     
     try:
-        # Step 1: Click the dropdown to open it
+        page = await browser.get_current_page()
+        
+        # Step 1: Get the dropdown element by index
         dom_el = await browser.get_dom_element_by_index(dropdown_index)
         if dom_el is None:
             return ActionResult(error=f"No element found at index {dropdown_index}")
@@ -1111,53 +1153,197 @@ async def handle_custom_dropdown(dropdown_index: int, option_text: str, browser:
         if dropdown_el is None:
             return ActionResult(error=f"Could not locate dropdown element at index {dropdown_index}")
         
-        # Click to open the dropdown
-        await dropdown_el.click()
-        await asyncio.sleep(1.0)  # Longer delay to let the dropdown open fully
+        # Get element information to determine its type
+        tag_name = await dropdown_el.evaluate('el => el.tagName.toLowerCase()')
+        class_name = await dropdown_el.evaluate('el => el.className') or ""
         
-        # Step 2: Find and click the option with matching text
-        page = await browser.get_current_page()
+        # Check if it's a Select2 dropdown
+        is_select2 = 'select2' in class_name or await dropdown_el.evaluate('el => !!document.querySelector("#s2id_" + el.id)')
         
-        # Try different selectors that are commonly used for dropdown options
-        option_selectors = [
-            f"div[role='option']:text-matches('{option_text}', 'i')",
-            f"li[role='option']:text-matches('{option_text}', 'i')",
-            f".select__option:text-matches('{option_text}', 'i')",
-            f"[id*='react-select'][id*='option']:text-matches('{option_text}', 'i')",
-            f".select-items div:text-matches('{option_text}', 'i')",
-            f".dropdown-menu li:text-matches('{option_text}', 'i')"
-        ]
-        
-        for selector in option_selectors:
-            try:
-                options = await page.query_selector_all(selector)
-                if options:
-                    await options[0].click()
-                    logger.info(f"Successfully selected option '{option_text}' from dropdown")
-                    return ActionResult(
-                        extracted_content=f"Selected '{option_text}' from dropdown at index {dropdown_index}",
-                        include_in_memory=True
-                    )
-            except Exception as e:
-                logger.debug(f"Selector {selector} failed: {str(e)}")
-        
-        # If specific selectors fail, try a more general approach
-        # Look for any visible element that contains the option text
-        all_elements = await page.query_selector_all('div, li, span')
-        for element in all_elements:
-            try:
-                text = await element.text_content()
-                if text and option_text.lower() in text.lower():
-                    is_visible = await element.is_visible()
-                    if is_visible:
-                        await element.click()
-                        logger.info(f"Selected element with text '{text}'")
+        if is_select2:
+            # Handle Select2 dropdown
+            
+            # Get the Select2 container
+            select2_container = None
+            
+            # Try to find by associated s2id element
+            select_id = await dropdown_el.get_attribute('id')
+            if select_id:
+                select2_container = await page.query_selector(f"#s2id_{select_id}")
+            
+            if not select2_container:
+                # Try to find near the dropdown
+                select2_container = await dropdown_el.evaluate('el => el.closest(".field")?.querySelector(".select2-container")')
+            
+            if select2_container:
+                # Click on the Select2 container to open the dropdown
+                await select2_container.click()
+                await asyncio.sleep(0.5)  # Wait for dropdown to open
+                
+                # Find and click the option
+                # First try the Select2 results list
+                option_found = False
+                
+                # Try to find the option in the results dropdown
+                try:
+                    # Find all result items
+                    results = await page.query_selector_all('.select2-results li, .select2-result')
+                    
+                    for result in results:
+                        try:
+                            text = await result.text_content()
+                            if text and option_text.lower() in text.lower():
+                                await result.click()
+                                logger.info(f"Selected Select2 option: '{text}'")
+                                option_found = True
+                                break
+                        except Exception:
+                            continue
+                    
+                    # If option still not found, try searching
+                    if not option_found:
+                        # Try to find and use the search input
+                        search_input = await page.query_selector('.select2-search input, input.select2-input')
+                        if search_input:
+                            await search_input.fill(option_text)
+                            await asyncio.sleep(0.5)
+                            
+                            # Try to find the option again after search
+                            results = await page.query_selector_all('.select2-results li, .select2-result')
+                            for result in results:
+                                try:
+                                    text = await result.text_content()
+                                    if text and option_text.lower() in text.lower():
+                                        await result.click()
+                                        logger.info(f"Selected Select2 option after search: '{text}'")
+                                        option_found = True
+                                        break
+                                except Exception:
+                                    continue
+                    
+                    if option_found:
                         return ActionResult(
-                            extracted_content=f"Selected element with text '{text}' from dropdown",
+                            extracted_content=f"Selected '{option_text}' from Select2 dropdown",
                             include_in_memory=True
                         )
-            except Exception:
-                continue
+                                
+                except Exception as e:
+                    logger.debug(f"Select2 result selection failed: {str(e)}")
+            
+            # If Select2 handling failed, try direct selection of the underlying select element
+            if tag_name == 'select':
+                # It's a standard select element, so we can use the built-in select functionality
+                try:
+                    await dropdown_el.select_option({'label': option_text})
+                    logger.info(f"Selected option '{option_text}' directly from select element")
+                    return ActionResult(
+                        extracted_content=f"Selected '{option_text}' directly from select element",
+                        include_in_memory=True
+                    )
+                except Exception as e:
+                    logger.debug(f"Direct select option failed: {str(e)}")
+                    
+                    # Try by value if label doesn't work
+                    try:
+                        # Get all options
+                        options = await dropdown_el.evaluate('''el => {
+                            return Array.from(el.options).map(option => {
+                                return {
+                                    value: option.value,
+                                    text: option.text
+                                };
+                            });
+                        }''')
+                        
+                        target_value = None
+                        for option in options:
+                            if option_text.lower() in option['text'].lower():
+                                target_value = option['value']
+                                break
+                                
+                        if target_value:
+                            await dropdown_el.select_option({'value': target_value})
+                            logger.info(f"Selected option by value: '{target_value}'")
+                            return ActionResult(
+                                extracted_content=f"Selected option '{option_text}' by value",
+                                include_in_memory=True
+                            )
+                    except Exception as e:
+                        logger.debug(f"Value-based selection failed: {str(e)}")
+        
+        # Standard approach for other dropdown types - try clicking first
+        if tag_name != 'select':  # Skip for select elements as we already tried that
+            try:
+                # Click to open the dropdown
+                await dropdown_el.click()
+                await asyncio.sleep(0.5)  # Wait for dropdown to open
+                
+                # Try different selectors that are commonly used for dropdown options
+                option_selectors = [
+                    f"div[role='option']:text-matches('{option_text}', 'i')",
+                    f"li[role='option']:text-matches('{option_text}', 'i')",
+                    f".select__option:text-matches('{option_text}', 'i')",
+                    f"[id*='react-select'][id*='option']:text-matches('{option_text}', 'i')",
+                    f".select-items div:text-matches('{option_text}', 'i')",
+                    f".dropdown-menu li:text-matches('{option_text}', 'i')"
+                ]
+                
+                for selector in option_selectors:
+                    try:
+                        options = await page.query_selector_all(selector)
+                        if options:
+                            await options[0].click()
+                            logger.info(f"Successfully selected option '{option_text}' from dropdown")
+                            return ActionResult(
+                                extracted_content=f"Selected '{option_text}' from dropdown at index {dropdown_index}",
+                                include_in_memory=True
+                            )
+                    except Exception as e:
+                        logger.debug(f"Selector {selector} failed: {str(e)}")
+                
+                # More general approach - find any visible element with matching text
+                all_elements = await page.query_selector_all('div, li, span, option')
+                for element in all_elements:
+                    try:
+                        text = await element.text_content()
+                        if text and option_text.lower() in text.lower():
+                            is_visible = await element.is_visible()
+                            if is_visible:
+                                await element.click()
+                                logger.info(f"Selected element with text '{text}'")
+                                return ActionResult(
+                                    extracted_content=f"Selected element with text '{text}' from dropdown",
+                                    include_in_memory=True
+                                )
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.debug(f"Standard dropdown approach failed: {str(e)}")
+        
+        # If we get here and the element is a select, try the most direct approach
+        if tag_name == 'select':
+            try:
+                # Try selecting by directly modifying the value
+                await dropdown_el.evaluate(f'''(el) => {{
+                    // Find the option with matching text
+                    for (let i = 0; i < el.options.length; i++) {{
+                        if (el.options[i].text.toLowerCase().includes('{option_text.lower()}')) {{
+                            el.selectedIndex = i;
+                            const event = new Event('change', {{ bubbles: true }});
+                            el.dispatchEvent(event);
+                            return true;
+                        }}
+                    }}
+                    return false;
+                }}''')
+                
+                logger.info(f"Selected option '{option_text}' via direct JavaScript")
+                return ActionResult(
+                    extracted_content=f"Selected '{option_text}' via direct JavaScript",
+                    include_in_memory=True
+                )
+            except Exception as e:
+                logger.debug(f"Direct JavaScript selection failed: {str(e)}")
         
         # If we get here, we couldn't find the option
         return ActionResult(
