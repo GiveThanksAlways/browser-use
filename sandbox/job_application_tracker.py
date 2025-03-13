@@ -74,7 +74,7 @@ class JobListing(BaseModel):
     job_title: str = Field(description="The title of the job position")
     apply_link: str = Field(description="URL link to apply for the job")
     company_name: str = Field(
-        default="Company ABC",
+        default="SpaceX",
         description="The name of the company offering the job"
     )
     location: Optional[str] = Field(
@@ -404,6 +404,8 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
     logger.info(f"Starting job listing scraping from: {url}")
     
     # Create browser instance
+    viewport_width, viewport_height = 1000, 1000
+    start_x, start_y = 1920, 0
     browser = Browser(
         config=BrowserConfig(
             disable_security=True,
@@ -411,11 +413,12 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
             extra_chromium_args=[
                 "--force-dark-mode",
                 "--enable-features=WebContentsForceDark",
-                "--window-size=2100,1000"  # This sets the actual window size of Chrome
+                f"--window-position={start_x},{start_y}",
+                f"--window-size={viewport_width},{viewport_height}"  # This sets the actual window size of Chrome
             ]
         )
     )
-    # https://www.anduril.com/open-roles/?location=&department=Software&search=&gh_src=
+
     try:
         # Define the task for the agent
         task_description = f"""
@@ -431,24 +434,25 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
         Only extract job listings - don't apply to any jobs.
         """
 
-        extend_system_message = (
-            'IMPORTANT: For handling dropdowns in job applications:\n\n'
-            '1. For dropdowns with visible labels, use "fill_greenhouse_dropdown" with a SHORT version of the label and option text.\n'
-            '   Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"\n\n'
-            '2. For dropdowns without clear labels, use "handle_custom_dropdown" with the dropdown index and option text.\n\n'
-            'Common dropdown fields and their options:\n'
-            '- Disability Status: "No, I do not have a disability and have not had one in the past"\n'
-            '- Gender: "Male"\n'
-            '- Veteran Status: "I am not a protected veteran"\n'
-            '- Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"\n'
-            '- Current Clearance Level: "N/A - have never held U.S. security clearance"\n\n'
-            'If a dropdown action fails after 2 attempts, try scrolling down and looking for other fields to fill.\n'
-            'DO NOT use the standard select_dropdown_option action as it will not work with these custom UI components.'
-        )
+        extend_system_message = f"""
+            IMPORTANT: THIS IS A ONE-STEP TASK.
+
+            Extract all job listings using EXACTLY ONE CALL to the extract_job_listings_chunked action.
+            Do not repeat this action. Do not scroll multiple times.
+
+            The extract_job_listings_chunked action will:
+            1. Process the entire page automatically
+            2. Extract all job listings from all sections of the page
+            3. Handle scrolling internally
+            4. Return ALL jobs in a single operation
+
+            After the extract_job_listings_chunked action completes successfully, use the "done" action.
+            Do not try to extract additional jobs or process the page further.
+            """
         
         # Initial actions for the agent
         initial_actions = [
-            {'open_tab': {'url': url}},
+            {'go_to_url': {'url': url}},
             {'wait': {'seconds': 5}}
         ]
         
@@ -463,7 +467,9 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
                 controller=controller_extract,  # Use the controller with output model
                 max_input_tokens=1040000,
                 save_conversation_path=str(CONVERSATION_PATH),
-                extend_system_message=extend_system_message
+                extend_system_message=extend_system_message,
+                max_failures=1,
+                max_actions_per_step=1
             )
             
             # Run the agent
@@ -525,7 +531,7 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
         logger.info("Browser closed after scraping job listings")
 
 # Job application function
-async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, Any], browser, browser_context) -> Tuple[bool, str, BrowserContext]:
+async def apply_to_job(job: Job, llm_gemini, llm_gemini_tool_use, resume_data: Dict[str, Any], browser, browser_context) -> Tuple[bool, str, BrowserContext]:
     """Apply to a single job and return success status and notes."""
     logger.info(f"Starting application for: {job.title} at {job.company}")
     
@@ -669,7 +675,7 @@ async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, 
         
         resume_agent = Agent(
             task=resume_task,
-            llm=llm_openai,  # Using OpenAI specifically for resume upload
+            llm=llm_gemini_tool_use,  # Using OpenAI specifically for resume upload
             controller=controller,
             initial_actions=[{'scroll_up': {'amount': 4000}}],
             browser=browser,
@@ -692,7 +698,7 @@ async def apply_to_job(job: Job, llm_gemini, llm_openai, resume_data: Dict[str, 
         return False, f"Application failed with error: {str(e)}", browser_context
 
 # Add a new function to handle the parallel job applications with review
-async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_data):
+async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_gemini_tool_use, resume_data):
     """Apply to multiple jobs in parallel with manual review."""
     if not jobs_list:
         print("No jobs to apply to.")
@@ -710,6 +716,7 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
     # Create a single browser instance for all jobs
     viewport_width, viewport_height = 1000, 1000
     start_x, start_y = 1920, 0
+    viewport_expansion_pixels = -1
     browser = Browser(
         config=BrowserConfig(
             disable_security=True,
@@ -722,7 +729,8 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
             ],
             new_context_config=BrowserContextConfig(
                 browser_window_size={'width': viewport_width, 'height': viewport_height},
-                save_recording_path=f'./tmp/recordings'
+                save_recording_path=f'./tmp/recordings',
+                viewport_expansion=viewport_expansion_pixels
             )
         )
     )
@@ -734,11 +742,11 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_openai, resume_da
         
         for i, job in enumerate(jobs_list, 1):
             # Create a browser context for this job
-            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': viewport_width, 'height': viewport_height}, save_recording_path=f'./tmp/recordings'))
+            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': viewport_width, 'height': viewport_height}, save_recording_path=f'./tmp/recordings', viewport_expansion=viewport_expansion_pixels))
             browser_contexts.append(browser_context)
             
             # Create an application task using apply_to_job
-            task = apply_to_job(job, llm_gemini, llm_openai, resume_data, browser, browser_context)
+            task = apply_to_job(job, llm_gemini, llm_gemini_tool_use, resume_data, browser, browser_context)
             application_tasks.append(task)
         
         print("\nStarting job applications in parallel. Please wait...")
@@ -861,6 +869,12 @@ async def main():
         api_key=SecretStr(api_key_gemini),
         max_tokens=1040000
     )
+
+    llm_gemini_tool_use = ChatGoogleGenerativeAI(
+        model='gemini-2.0-flash-lite', 
+        api_key=SecretStr(api_key_gemini),
+        max_tokens=1040000
+    )
     
     # Create OpenAI LLM for resume upload only
     llm_openai = ChatOpenAI(
@@ -928,7 +942,7 @@ async def main():
             selected_jobs = jobs_to_apply[:num_jobs]
             
             # Apply to the selected jobs
-            await apply_to_jobs_in_parallel(selected_jobs, llm_gemini, llm_openai, resume_data)
+            await apply_to_jobs_in_parallel(selected_jobs, llm_gemini, llm_gemini_tool_use, resume_data)
         
         elif choice == "3":
             # View jobs to apply

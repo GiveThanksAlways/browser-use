@@ -1,0 +1,129 @@
+{
+    "personal_information": {
+      "name": "Spencer Willett",
+      "email": "spencer.willett15@gmail.com",
+      "mobile": "858-319-9931",
+      "website": "givethanksalways.github.io",
+      "LinkedIn": "https://www.linkedin.com/in/spencer-willett",
+      "GitHub": "https://www.github.com/GiveThanksAlways",
+      "X": "https://x.com/BeGrateful180",
+      "Twitter": "https://x.com/BeGrateful180"
+    },
+    "experience": [
+      {
+        "title": "Freelance Software Engineer",
+        "company": "Software Engineer",
+        "location": "San Diego, CA",
+        "dates": "Sept 2024 - present",
+        "details": [
+          "NVIDIA Jetson Dev Kit: Implemented secure boot for AI startup",
+          "Wifi and BLE: Created and tested wifi and BLE connection methods for the NVIDIA Jetson Dev Kit",
+          "AI Webform Automator: Created a chrome extension for a client to upload a PDF file and automatically fill in a webform"
+        ]
+      },
+      {
+        "title": "Software Engineer - Secure Systems Group",
+        "company": "Qualcomm",
+        "location": "San Diego, CA",
+        "dates": "May 2022 - Dec 2023",
+        "details": [
+          "C Library: Built a library in C for use on Embedded Linux and Android. Involved concepts used for IPC.",
+          "Trusted Virtual Machine Development: Integrated the C Library I built and updated the unit testing suite used to test the Trusted Virtual Machine",
+          "Test Driven Development: Designed C++ code with a Test Driven Development approach using the Google Test framework",
+          "Static Analysis: Fixed code security vulnerabilities for multiple repositories using an internal static analysis tool to audit code",
+          "Open Source: Contributed actively to both open-source and proprietary code bases",
+          "Gerrit/GitHub: Used both Gerrit and GitHub for software collaboration and code reviews"
+        ]
+      },
+      {
+        "title": "Software Engineer - Graduate Student Intern",
+        "company": "Intel",
+        "location": "Chandler, AZ",
+        "dates": "Nov 2019 - Dec 2021",
+        "details": [
+          "12x Optimization: Designed and implemented a 12x data processing optimization (using multithreaded code) to reduce the run time from 1 hour to under 5 minutes. (C#)",
+          "Group Presentation: Gave a presentation to a group of software engineers on development tools and potential uses for the group: Docker, GitLab CI/CD",
+          "Docker: Designed and implemented a replica database using Docker to use for development (previously the group has used the production database during testing phases)"
+        ]
+      },
+      {
+        "title": "Graduate Student Assistant - CSE 539 Applied Cryptography",
+        "company": "Arizona State University",
+        "location": "Tempe, AZ",
+        "dates": "Aug 2021 - Dec 2021",
+        "details": [
+          "Course Design: Proposed, designed, and implemented extra credit projects for the students: Time-Based One-Time Passwords (TOTP) in Python to match the Google Authenticator app on their phones.",
+          "Projects: Developed correct solutions for the five major projects in the course: Steganography, cryptanalysis, MD5 hash collisions, Diffie-Hellman key exchange, and RSA key exchange (C#)"
+        ]
+      }
+    ],
+    "education": [
+      {
+        "institution": "Arizona State University",
+        "degree": "Master of Science in Computer Science",
+        "location": "Tempe, AZ",
+        "dates": "Aug. 2019 - Dec. 2021"
+      },
+      {
+        "institution": "Brigham Young University",
+        "degree": "Bachelor of Science in Physics",
+        "location": "Provo, UT",
+        "dates": "2017"
+      }
+    ],
+    "projects": [
+      {
+        "name": "Virtual Computer",
+        "description": "I built a virtual computer following the Nand2Tetris course offered by the Hebrew University of Jerusalem"
+      }
+    ],
+    "honors_awards": [
+      {
+        "name": "Hackathon 2nd Place Team",
+        "description": "I was the lead software engineer on my team. I built a basic LeNet convolutional neural network using Keras in Python. Hosted by FOX at ASU."
+      }
+    ],
+    "programming_skills": {
+      "languages": [
+        "C++",
+        "C",
+        "Python",
+        "Rust"
+      ],
+      "technologies": [
+        "Linux",
+        "NVIDIA Jetson Dev Kit",
+        "GDB"
+      ]
+    },
+    "extra answers": {
+        "U.S. Work Authorization": "Yes",
+        "Will you require sponsorship from Anduril for employment now or in the future (e.g, H1B visa)?": "No",
+        "HISTORY WITH ANDURIL": "No",
+        "Have you ever been employed by Anduril or any company that Anduril has acquired?": "No",
+        "CONFLICT OF INTEREST": "No",
+        "Are you any of the following “protected individual(s)” as defined in the Immigration and Naturalization Act, 8 U.S.C. 1324b(a)(3): A United States citizen or national?": "Yes",
+        "CLEARANCE ELIGIBILITY - This position requires eligibility to obtain and maintain a U.S. security clearance.": "Yes, I am eligible for a U.S. security clearance",
+        "If you have held a U.S. security clearance in the past, what clearance level have you held?": "N/A - have never held U.S. security clearance",
+        "Please list all countries of which you are a citizen, and, if applicable, the date you obtained citizenship.": "N/A",
+        "Please list any additional countries of which you are a lawful permanent resident and, if applicable, the date you obtained permanent residency.": "N/A",
+        "You must be eligible to obtain and hold a US DoD Security Clearance. In order to be eligible you must be a US Citizen. Can you please confirm you are eligible to obtain and hold a US DoD Security Clearance?": "Yes",
+        "Are you any of the following “protected individual(s)” as defined in the Immigration and Naturalization Act, 8 U.S.C. 1324b(a)(3): A person lawfully admitted for permanent residence of the United States (i.e., “Green Card” holder)?": "No",
+        "What is the country of your birth? (If you are a United States citizen or national, please answer with \"N/A\". Otherwise, it is the policy of Anduril to ask the following questions of all such persons completing this form.)": "N/A",
+        "Please list all countries of which you are a citizen, and, if applicable, the date you obtained citizenship. (If you are a United States citizen or national, please answer with \"N/A\". Otherwise, it is the policy of Anduril to ask the following questions of all such persons completing this form.)": "N/A",
+        "Please list any additional countries of which you are a lawful permanent resident and, if applicable, the date you obtained permanent residency. (If you are a United States citizen or national, please answer with \"N/A\". Otherwise, it is the policy of Anduril to ask the following questions of all such persons completing this form.)": "N/A",
+        "Do you presently hold an active U.S. security clearance, or are you eligible to obtain and maintain a U.S. security clearance? More information about eligibility for security clearance can be found in the link below.": "Yes, I am eligible for a U.S. security clearance",
+        "Do you currently, or have you in the last 5 years, worked for the US government (e.g., Congressional staffer, member of the military, state, or federal agencies) and had oversight or similar responsibility over Anduril’s business or other interests?": "No",
+        "EXPORT CONTROLS - This position requires access to information and technology that is subject to U.S. export controls. Your responses to the questions below will be used solely to determine your eligibility under U.S. law to receive information and materials subject to U.S. export controls.": "A United States citizen or national",
+        "This position is located in our Costa Mesa, CA Headquarters. Are you currently located within 30 miles or open to a relocation?": "Yes"
+    }
+    ,
+    "Voluntary Self-Identification": {
+        "gender": ["Male"],
+        "Are you Hispanic/Latino?": "Decline to self Identify",
+        "race": ["White"],
+        "Please identify your race": "White",
+        "Veteran Status": "I am not a protected veteran",
+        "Disability Status": "No, I do not have a disability and have note had one in the past"
+    }
+  }

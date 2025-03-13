@@ -189,4 +189,5 @@ gcp-login.json
 
 uv.lock
 
-darkreader-extension/
+# exception for resume.json data
+!resume.json
