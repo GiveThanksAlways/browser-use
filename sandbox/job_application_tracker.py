@@ -573,6 +573,14 @@ async def apply_to_job(job: Job, llm_gemini, llm_gemini_tool_use, resume_data: D
     """Apply to a single job and return success status and notes."""
     logger.info(f"Starting application for: {job.title} at {job.company}")
     
+    # Configuration to control which agents to run
+    agent_config = {
+        "run_form_filling_agent": True,  # Set to True to run the main form filling agent
+        "run_resume_upload_agent": True,  # Set to True to run the resume upload agent
+        "run_education_agent": True,      # Set to True to run the education fields agent
+        "run_double_check_agent": False,   # Set to True to run the double check agent
+    }
+    
     if browser is None:
         raise ValueError("Browser instance is required for apply_to_job function.")
     
@@ -583,10 +591,13 @@ async def apply_to_job(job: Job, llm_gemini, llm_gemini_tool_use, resume_data: D
             '1. For dropdowns with visible labels, use "fill_greenhouse_dropdown" with a SHORT version of the label and option text.\n'
             '   Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"\n\n'
             '2. For dropdowns without clear labels, use "handle_custom_dropdown" with the dropdown index and option text.\n\n'
-            'Common dropdown fields and their options:\n'
-            '- Disability Status: "No, I do not have a disability and have not had one in the past"\n'
-            '- Gender: "Male"\n'
-            '- Veteran Status: "I am not a protected veteran"\n'
+            'SKIP ALL VOLUNTARY SELF-IDENTIFICATION FIELDS including:\n'
+            '- Disability Status (DO NOT FILL)\n'
+            '- Gender (DO NOT FILL)\n'
+            '- Veteran Status (DO NOT FILL)\n'
+            '- Race/Ethnicity (DO NOT FILL)\n'
+            '- Any other EEO or diversity fields (DO NOT FILL)\n\n'
+            'Only fill job-relevant dropdown fields such as:\n'
             '- Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"\n'
             '- Current Clearance Level: "N/A - have never held U.S. security clearance"\n\n'
             'IMPORTANT: If a dropdown action fails after 1 attempt, move on to other fields.\n'
@@ -594,6 +605,14 @@ async def apply_to_job(job: Job, llm_gemini, llm_gemini_tool_use, resume_data: D
             'DO NOT use the standard select_dropdown_option action as it will not work with these custom UI components.\n\n'
             'CRITICAL: NEVER CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR. DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM.'
         )
+        
+        # Navigate to the job page if we're not running the form filling agent
+        if not agent_config["run_form_filling_agent"]:
+            # Navigate to the job page using the browser context directly
+            page = await browser_context.get_current_page()
+            await page.goto(job.link)
+            await asyncio.sleep(2)  # Wait for page to load
+            logger.info("Navigated to job page without form filling agent")
         
         # Initial actions for the agent - add a pause at the beginning
         initial_actions = [
@@ -609,122 +628,286 @@ async def apply_to_job(job: Job, llm_gemini, llm_gemini_tool_use, resume_data: D
             context_created_internally = False
             
         # STEP 1: Combined form filling agent - handles both dropdowns and text fields
-        logger.info("Starting combined form filling agent - handling all form fields")
-        combined_task = f"""
-        You are applying for the job: {job.title} at {job.company} in {job.location}.
+        if agent_config["run_form_filling_agent"]:
+            logger.info("Starting combined form filling agent - handling all form fields")
+            combined_task = f"""
+            You are applying for the job: {job.title} at {job.company} in {job.location}.
+            
+            Use the resume information provided to fill out the application form completely.
+            Fill in BOTH dropdown fields AND text fields in a single pass.
+            
+            IMPORTANT INSTRUCTIONS:
+            
+            For dropdown fields:
+            1. Use SHORT versions of field labels with "fill_greenhouse_dropdown"
+               Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"
+            2. If that fails, try "handle_custom_dropdown" with the dropdown index
+            3. IMPORTANT: If a dropdown is giving you trouble after 1 attempt, move on to other fields
+            4. If you cannot find any dropdown fields after 2 scroll attempts, assume they are not present and continue
+            5. DO NOT use the standard select_dropdown_option action
+            
+            For text fields:
+            1. Fill in all text input fields with appropriate information from the resume
+            2. Common fields include name, email, phone, address, work experience, education, etc.
+            3. IMPORTANT: Make sure to fill in LinkedIn profile and website fields if present
+               - For LinkedIn, use the full URL from the resume
+               - For website, use the personal website or GitHub URL from the resume
+            
+            CRITICAL: SKIP ALL VOLUNTARY SELF-IDENTIFICATION FIELDS
+            DO NOT fill in ANY of the following voluntary self-identification fields:
+            - Disability Status
+            - Gender/Sex
+            - Veteran Status
+            - Race/Ethnicity
+            - Sexual Orientation
+            - Any other EEO or diversity information fields
+            If you see these fields, ignore them completely and move on to the next section.
+            
+            SPECIAL INSTRUCTIONS FOR LOCATION FIELD:
+            1. For the Location/City field, you MUST use a three-step process:
+               a. First, type the location (e.g., "San Diego") in the field
+               b. Wait for dropdown options to appear
+               c. Click on the correct option from the dropdown (e.g., "San Diego, California, United States")
+            2. DO NOT just type the location and move on - you MUST select from the dropdown
+            
+            SPECIAL INSTRUCTIONS FOR ACTIVE SECURITY CLEARANCE(S) FIELD:
+            1. For this field, you MUST use a similar three-step process:
+               a. First, type "Never held a clearance" in the field
+               b. Wait for dropdown options to appear
+               c. Click on the matching option to select it
+            2. DO NOT just type the text and move on - you MUST click to select it from the dropdown
+            3. IMPORTANT: DO THIS STEP LAST!!!
+            
+            Common dropdown fields to FILL (excluding voluntary self-identification):
+            - Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"
+            - Current Clearance Level: "N/A - have never held U.S. security clearance"
+            - Active Security Clearance(s): "Never held a clearance"
+            
+            CRITICAL RESTRICTIONS - YOU MUST FOLLOW THESE:
+            - DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
+            - DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM
+            - DO NOT CLICK ANY BUTTONS THAT MIGHT SUBMIT THE FORM
+            - DO NOT USE THE click_element ACTION ON ANY BUTTON THAT MIGHT SUBMIT THE FORM
+            - Do not upload resume/cover letter (this will be handled separately)
+            - Do not click on links that navigate away from the form
+            - Do NOT click "Enter manually" buttons - just fill in the fields that are available
+            - Do NOT try to enter work experience in a text area if it's not already visible
+            - Do NOT fill in ANY voluntary self-identification fields (disability, gender, veteran status, etc.)
+            
+            FIELD PRIORITY ORDER:
+            1. Basic information (name, email, phone)
+            2. Location (using the special three-step process described above)
+            3. LinkedIn profile and website
+            4. Work experience fields ONLY if they are already visible text fields
+            5. Job-relevant dropdown fields (clearance, etc.) - but don't spend too much time on these if they're not working
+            
+            SCROLLING INSTRUCTIONS:
+            - Scroll down in small increments (300-400 pixels at a time)
+            - After scrolling down 3 times, check if you've reached the bottom of the form
+            - If you see a Submit button or the end of the form, STOP scrolling down
+            - Maximum 4 scroll_down actions total - then assume you've seen the whole form
+            
+            ADAPTIVE APPROACH:
+            - If you can't find dropdown fields after 2 attempts, consider the form may not have them
+            - Focus on completing all text fields correctly rather than getting stuck on dropdowns
+            - After 3 failed dropdown attempts total, move on and report success on the fields you did complete
+            - If you can't find a field to enter work experience, just skip it - DO NOT click "Enter manually"
+
+            **NOTE: DO NOT CLICK ANY BUTTONS THAT MIGHT SUBMIT THE FORM or take you to a new page**
+            
+            Make sure to read through the resume data carefully before starting to fill out the form.
+            
+            FINAL INSTRUCTION: When done filling out the form, use the "done" action with success=true. DO NOT CLICK SUBMIT.
+            """
+            
+            # Set a timeout for the agent to prevent getting stuck
+            combined_agent = Agent(
+                task=combined_task,
+                llm=llm_gemini,
+                initial_actions=initial_actions,
+                message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
+                max_input_tokens=128000,  # Ensure enough tokens for resume data
+                browser=browser,
+                browser_context=browser_context,
+                extend_system_message=extend_system_message,
+                controller=controller_dropdown
+            )
+            
+            await combined_agent.run()
+            logger.info("Form fields completed, now uploading resume...")
         
-        Use the resume information provided to fill out the application form completely.
-        Fill in BOTH dropdown fields AND text fields in a single pass.
+        # STEP 2: Resume upload agent
+        if agent_config["run_resume_upload_agent"]:
+            resume_task = """
+            Your task is to upload both the resume and portfolio files using the appropriate controller actions.
+            
+            IMPORTANT:
+            1. First scroll up to find the file upload sections
+            2. Look for the resume upload field (usually near the top of the form)
+            3. Use the upload_resume controller action to upload the resume
+            4. Then look for the portfolio/cover letter upload field (usually below the resume field)
+            5. Use the upload_portfolio controller action to upload the portfolio
+            6. DO NOT click any buttons labeled 'Attach' or 'Browse' - just use the controller actions directly
+            7. DO NOT click any other buttons or links
+            8. DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
+            9. NEVER use click_element on any button at the bottom of the form
+            
+            EXAMPLE ACTIONS:
+            {"upload_resume": {"index": 0}}  // For resume upload
+            {"upload_portfolio": {"index": 1}}  // For portfolio upload
+            
+            Just focus on using the controller actions directly.
+            
+            FINAL INSTRUCTION: When done uploading both files, use the "done" action with success=true. DO NOT CLICK SUBMIT.
+            """
+            
+            resume_agent = Agent(
+                task=resume_task,
+                llm=llm_gemini_tool_use,
+                controller=controller,
+                initial_actions=[{'scroll_up': {'amount': 4000}}],
+                browser=browser,
+                browser_context=browser_context,
+                extend_system_message='CRITICAL: NEVER CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR. DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM.'
+            )
+            
+            await resume_agent.run()
+            logger.info("Resume upload attempt completed")
+        else:
+            logger.info("Skipping resume upload agent as per configuration")
         
-        IMPORTANT INSTRUCTIONS:
+        # STEP 3: Education fields agent - specifically for School/Degree/Discipline
+        if agent_config["run_education_agent"]:
+            education_task = """
+            Your ONLY task is to fill in the three education dropdown fields using the resume data.
+            
+            EDUCATION INFORMATION FROM RESUME:
+            - School: Arizona State University
+            - Degree: Master's Degree
+            - Discipline: Computer Science
+            
+            EXACT STEPS TO FOLLOW:
+            1. Scroll down to find the education section (usually after the basic information)
+            2. For each field (School, Degree, Discipline):
+                a. Click on the dropdown to open it using click_element
+                b. When the search box appears, use input_text to type the exact value
+                c. Click on the matching option that appears using click_element
+            
+            DO NOT use the fill_greenhouse_dropdown action as it's not working reliably.
+            Instead, use these three separate actions for each field:
+            1. click_element - to open the dropdown
+            2. input_text - to enter the value
+            3. click_element - to select the matching option
+            
+            EXAMPLE SEQUENCE FOR SCHOOL:
+            1. {"click_element": {"selector": "#s2id_education_school_name_0"}} or use index if needed
+            2. {"input_text": {"text": "Arizona State University"}}
+            3. {"click_element": {"text": "Arizona State University"}} or use index if needed
+            
+            Repeat this sequence for Degree and Discipline fields.
+
+            **NOTE: DO NOT CLICK ANY BUTTONS THAT MIGHT SUBMIT THE FORM or take you to a new page**
+            
+            When done, use the "done" action with success=true.
+            """
+            
+            # For education agent, we need to navigate to the education section
+            education_initial_actions = []
+            if not agent_config["run_form_filling_agent"]:
+                # If we didn't run the form filling agent, we need to add the go_to_url action
+                education_initial_actions.append({'go_to_url': {'url': job.link}})
+                await asyncio.sleep(2)  # Wait for page to load
+            
+            # Add scroll to education section
+            education_initial_actions.append({'scroll_down': {'amount': 1200}})
+            
+            education_agent = Agent(
+                task=education_task,
+                llm=llm_gemini_tool_use,
+                controller=controller_dropdown,
+                initial_actions=education_initial_actions,
+                browser=browser,
+                browser_context=browser_context,
+                extend_system_message='Focus ONLY on the education dropdowns. Use click_element and input_text actions to interact with them. Do not click any other elements.'
+            )
+            
+            await education_agent.run()
+            logger.info("Education fields completed")
+        else:
+            logger.info("Skipping education agent as per configuration")
         
-        For dropdown fields:
-        1. Use SHORT versions of field labels with "fill_greenhouse_dropdown"
-           Example: For "CLEARANCE ELIGIBILITY - This position requires...", just use "CLEARANCE ELIGIBILITY"
-        2. If that fails, try "handle_custom_dropdown" with the dropdown index
-        3. IMPORTANT: If a dropdown is giving you trouble after 1 attempt, move on to other fields
-        4. If you cannot find any dropdown fields after 2 scroll attempts, assume they are not present and continue
-        5. DO NOT use the standard select_dropdown_option action
-        
-        For text fields:
-        1. Fill in all text input fields with appropriate information from the resume
-        2. Common fields include name, email, phone, address, work experience, education, etc.
-        3. IMPORTANT: Make sure to fill in LinkedIn profile and website fields if present
-           - For LinkedIn, use the full URL from the resume
-           - For website, use the personal website or GitHub URL from the resume
-        
-        Common dropdown fields and their typical values:
-        - Disability Status: "No, I do not have a disability and have not had one in the past"
-        - Gender: "Male" (adjust based on applicant)
-        - Veteran Status: "I am not a protected veteran"
-        - Clearance Eligibility: "Yes, I am eligible for a U.S. security clearance"
-        - Current Clearance Level: "N/A - have never held U.S. security clearance"
-        
-        CRITICAL RESTRICTIONS - YOU MUST FOLLOW THESE:
-        - DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
-        - DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM
-        - DO NOT CLICK ANY BUTTONS THAT MIGHT SUBMIT THE FORM
-        - DO NOT USE THE click_element ACTION ON ANY BUTTON THAT MIGHT SUBMIT THE FORM
-        - Do not upload resume/cover letter (this will be handled separately)
-        - Do not click on links that navigate away from the form
-        - Do NOT click "Enter manually" buttons - just fill in the fields that are available
-        - Do NOT try to enter work experience in a text area if it's not already visible
-        
-        FIELD PRIORITY ORDER:
-        1. Basic information (name, email, phone)
-        2. LinkedIn profile and website (don't skip these!)
-        3. Work experience fields ONLY if they are already visible text fields
-        4. Dropdown fields (clearance, gender, etc.) - but don't spend too much time on these if they're not working
-        
-        SCROLLING INSTRUCTIONS:
-        - Scroll down in small increments (300-400 pixels at a time)
-        - After scrolling down 3 times, check if you've reached the bottom of the form
-        - If you see a Submit button or the end of the form, STOP scrolling down
-        - Maximum 4 scroll_down actions total - then assume you've seen the whole form
-        
-        ADAPTIVE APPROACH:
-        - If you can't find dropdown fields after 2 attempts, consider the form may not have them
-        - Focus on completing all text fields correctly rather than getting stuck on dropdowns
-        - After 3 failed dropdown attempts total, move on and report success on the fields you did complete
-        - If you can't find a field to enter work experience, just skip it - DO NOT click "Enter manually"
-        
-        Make sure to read through the resume data carefully before starting to fill out the form.
-        
-        FINAL INSTRUCTION: When done filling out the form, use the "done" action with success=true. DO NOT CLICK SUBMIT.
-        """
-        
-        # Set a timeout for the agent to prevent getting stuck
-        combined_agent = Agent(
-            task=combined_task,
-            llm=llm_gemini,
-            initial_actions=initial_actions,
-            message_context=f"RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
-            max_input_tokens=128000,  # Ensure enough tokens for resume data
-            browser=browser,
-            browser_context=browser_context,
-            extend_system_message=extend_system_message,
-            controller=controller_dropdown
-        )
-        
-        await combined_agent.run()
-        logger.info("Form fields completed, now uploading resume...")
-        
-        # STEP 2: Resume upload agent (uses OpenAI LLM)
-        resume_task = """
-        Your task is to upload both the resume and portfolio files using the appropriate controller actions.
-        
-        IMPORTANT:
-        1. First scroll up to find the file upload sections
-        2. Look for the resume upload field (usually near the top of the form)
-        3. Use the upload_resume controller action to upload the resume
-        4. Then look for the portfolio/cover letter upload field (usually below the resume field)
-        5. Use the upload_portfolio controller action to upload the portfolio
-        6. DO NOT click any buttons labeled 'Attach' or 'Browse' - just use the controller actions directly
-        7. DO NOT click any other buttons or links
-        8. DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
-        9. NEVER use click_element on any button at the bottom of the form
-        
-        EXAMPLE ACTIONS:
-        {"upload_resume": {"index": 0}}  // For resume upload
-        {"upload_portfolio": {"index": 1}}  // For portfolio upload
-        
-        Just focus on using the controller actions directly.
-        
-        FINAL INSTRUCTION: When done uploading both files, use the "done" action with success=true. DO NOT CLICK SUBMIT.
-        """
-        
-        resume_agent = Agent(
-            task=resume_task,
-            llm=llm_gemini_tool_use,
-            controller=controller,
-            initial_actions=[{'scroll_up': {'amount': 4000}}],
-            browser=browser,
-            browser_context=browser_context,
-            extend_system_message='CRITICAL: NEVER CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR. DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM.'
-        )
-        
-        await resume_agent.run()
-        logger.info("Resume upload attempt completed")
+        # STEP 4: Double check agent - review the entire form for completeness
+        if agent_config.get("run_double_check_agent", True):  # Default to True
+            logger.info("Starting double check agent - reviewing the entire form")
+            double_check_task = f"""
+            Your task is to review the entire job application form for {job.title} at {job.company} and ensure all fields are properly filled.
+            
+            IMPORTANT INSTRUCTIONS:
+            
+            1. First, scroll to the top of the form to start your review
+            2. Systematically check each section of the form, scrolling down in small increments (300-400 pixels)
+            3. Look for any empty required fields or fields with incorrect information
+            4. If you find an empty or incorrect field, fill it using the resume data provided
+            5. If a dropdown field has "please select" it has not been filled yet and you need to attempt to fill it
+            
+            CRITICAL: SKIP ALL VOLUNTARY SELF-IDENTIFICATION FIELDS
+            DO NOT review or fill in ANY of the following voluntary self-identification fields:
+            - Disability Status
+            - Gender/Sex
+            - Veteran Status
+            - Race/Ethnicity
+            - Sexual Orientation
+            - Any other EEO or diversity information fields
+            If you see these fields, ignore them completely even if they appear empty or unfilled.
+            
+            FOCUS PRIMARILY ON BLANK FIELDS:
+            - ONLY modify fields that are completely empty or clearly incorrect
+            - If a field already has text in it, assume it is correct and DO NOT change it
+            - For dropdowns, only modify if they show "Select..." or "Please select" or are obviously wrong
+            - DO NOT re-fill fields that already have valid information
+            - DO NOT fill any voluntary self-identification fields even if empty
+            
+            The complete resume data is available to you in the context. Use this information to verify and correct any fields.
+            
+            INTERACTION APPROACH:
+            - Use simple click_element and input_text actions only
+            - For dropdowns, use the three-step approach:
+              1. Click to open the dropdown
+              2. Type the value
+              3. Click the matching option
+            - For text fields, simply use input_text if the field is empty
+            
+            CRITICAL RESTRICTIONS:
+            - DO NOT CLICK ANY BUTTON LABELED "SUBMIT", "APPLY", "SEND", "CONTINUE", OR SIMILAR
+            - DO NOT CLICK ANY BUTTONS AT THE BOTTOM OF THE FORM
+            - DO NOT CLICK ANY BUTTONS THAT MIGHT SUBMIT THE FORM
+            - DO NOT fill in ANY voluntary self-identification fields (disability, gender, veteran status, etc.)
+            
+            FINAL INSTRUCTION: When you've reviewed the entire form and fixed any issues, use the "done" action with success=true and report what you found and fixed.
+            """
+            
+            # Initial actions for the double check agent
+            double_check_initial_actions = [
+                {'scroll_up': {'amount': 4000}},  # Scroll to top first
+                {'wait': {'seconds': 1}}
+            ]
+            
+            double_check_agent = Agent(
+                task=double_check_task,
+                llm=llm_gemini_tool_use,
+                controller=controller_dropdown,
+                initial_actions=double_check_initial_actions,
+                browser=browser,
+                browser_context=browser_context,
+                message_context=f"FULL RESUME DATA:\n{json.dumps(resume_data, indent=2)}",
+                max_input_tokens=128000,  # Ensure enough tokens for resume data
+                extend_system_message='Focus on finding and fixing any missing or incorrect fields. Use only click_element and input_text actions. DO NOT click any submit buttons or buttons at the bottom of the form.'
+            )
+            
+            await double_check_agent.run()
+            logger.info("Double check review completed")
+        else:
+            logger.info("Skipping double check agent as per configuration")
         
         # Simply log that the application is ready and assume success
         print(f"Application prepared for: {job.title} at {job.company}")
@@ -769,7 +952,6 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_gemini_tool_use, 
             ],
             new_context_config=BrowserContextConfig(
                 browser_window_size={'width': viewport_width, 'height': viewport_height},
-                save_recording_path=f'./tmp/recordings',
                 viewport_expansion=viewport_expansion_pixels
             )
         )
@@ -782,7 +964,7 @@ async def apply_to_jobs_in_parallel(jobs_list, llm_gemini, llm_gemini_tool_use, 
         
         for i, job in enumerate(jobs_list, 1):
             # Create a browser context for this job
-            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': viewport_width, 'height': viewport_height}, save_recording_path=f'./tmp/recordings', viewport_expansion=viewport_expansion_pixels))
+            browser_context = await browser.new_context(BrowserContextConfig(browser_window_size={'width': viewport_width, 'height': viewport_height}, viewport_expansion=viewport_expansion_pixels))
             browser_contexts.append(browser_context)
             
             # Create an application task using apply_to_job
