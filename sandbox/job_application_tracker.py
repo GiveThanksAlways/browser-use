@@ -1099,17 +1099,94 @@ async def close_current_tab(browser: BrowserContext):
         logger.error(error_msg)
         return ActionResult(error=error_msg)
 
+@controller.action('Click element with CTRL to open in new tab')
+async def click_element_with_ctrl(index: int, browser: BrowserContext):
+    """Click an element while holding CTRL to open it in a new tab."""
+    try:
+        if index not in await browser.get_selector_map():
+            return ActionResult(error=f'Element with index {index} does not exist')
+        
+        # Get the element node
+        element_node = await browser.get_dom_element_by_index(index)
+        
+        # Get the page
+        page = await browser.get_current_page()
+        session = await browser.get_session()
+        initial_pages = len(session.context.pages)
+        
+        # Get element details for better targeting
+        selector_info = await browser.get_selector_map()
+        selector = selector_info.get(index)
+        
+        if not selector:
+            return ActionResult(error=f'No selector found for index {index}')
+            
+        # Use the selector to find and click the element
+        try:
+            # Try clicking with CSS selector first
+            await page.locator(selector).click(modifiers=["Control"])
+        except Exception as css_error:
+            try:
+                # If CSS fails, try directly with playwright's click
+                element = await page.query_selector(f'[data-testid="element-{index}"]')
+                if element:
+                    await element.click(modifiers=["Control"])
+                else:
+                    # Last resort, try to navigate directly if it's an anchor
+                    href = await element_node.get_attribute("href")
+                    if href:
+                        # Open the href in a new tab
+                        await browser.create_new_tab(href)
+                    else:
+                        raise Exception(f"Could not find clickable element for index {index}")
+            except Exception as backup_error:
+                raise Exception(f"Failed both click methods: CSS error: {css_error}, Backup error: {backup_error}")
+        
+        # Wait for a moment to allow the new tab to open
+        await asyncio.sleep(3)
+        
+        # Check if a new tab was opened and switch to it
+        if len(session.context.pages) > initial_pages:
+            # Switch to the new tab
+            await browser.switch_to_tab(-1)
+            msg = f'🔗 Clicked element with index {index} with CTRL key to open in new tab and switched to it'
+        else:
+            msg = f'🖱️ Clicked element with index {index} with CTRL key but no new tab opened'
+        
+        logger.info(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
+    except Exception as e:
+        error_msg = f"Error clicking element with CTRL: {str(e)}"
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
+
+@controller.action('Open specific URL in new tab')
+async def open_url_in_new_tab(url: str, browser: BrowserContext):
+    """Open a specific URL in a new tab as a fallback."""
+    try:
+        # Create a new tab with the specified URL
+        await browser.create_new_tab(url)
+        
+        # Switch to the new tab (it should be the last one)
+        await browser.switch_to_tab(-1)
+        
+        msg = f'🔗 Opened {url} in a new tab and switched to it'
+        logger.info(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
+    except Exception as e:
+        error_msg = f"Error opening URL in new tab: {str(e)}"
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
+
 async def apply_to_apple_jobs(url: str, llm):
     """
-    Specifically optimized for applying to Apple jobs from their careers site.
+    Simplified version optimized for applying to Apple jobs from their careers site.
     This function does a simple sequence:
-    1. Click "+" to expand job
-    2. Use CTRL+Click on "Submit Resume" to open in a new tab
-    3. Click green "Continue" button in the new tab
-    4. Click blue "Submit" button
-    5. Close tab and return to jobs listing
-    6. Click "X" to collapse the job details
-    7. Move to the next job and repeat
+    1. CTRL+Click on the job title to open in a new tab
+    2. Click green "Continue" button in the new tab
+    3. Click blue "Submit" button
+    4. Close tab and return to jobs listing
+    5. Move to the next job and repeat
     """
     logger.info(f"Starting Apple job application process from: {url}")
     
@@ -1135,15 +1212,12 @@ async def apply_to_apple_jobs(url: str, llm):
         task_description = """
         Apply to multiple Apple job listings by following ONLY these exact steps for each job:
         
-        1. Click the "+" button next to a job to expand its details
-        2. When job details appear, look specifically for the blue "Submit Resume" button
-           - Use click_element_with_ctrl to open it in a new tab
-           - If that fails, find the URL from the button and use open_url_in_new_tab
-        3. In the new tab, look for and click the green "Continue" button
-        4. Look for and click the blue "Submit" button
-        5. Use close_current_tab to return to the jobs listing
-        6. Important: Click the "X" button (it's in the same place where the "+" was) to collapse the job details
-        7. Move to the next job with a "+" button and repeat
+        1. Find a job title (usually in blue text) and use click_element_with_ctrl to open it in a new tab
+           - If that fails, find the URL from the job title and use open_url_in_new_tab
+        2. In the new tab, look for and click the green "Continue" button
+        3. Look for and click the blue "Submit" button
+        4. Use close_current_tab to return to the jobs listing
+        5. Move to the next job title and repeat
         
         DO NOT:
         - Fill out any forms
@@ -1159,29 +1233,27 @@ async def apply_to_apple_jobs(url: str, llm):
         # Initial actions for the agent
         initial_actions = [
             {'go_to_url': {'url': url}},
-            {'wait': {'seconds': 15}}  # Give more time for the page to fully load
+            {'wait': {'seconds': 10}}  # Give more time for the page to fully load
         ]
         
         # Define a system message to reinforce the focused behavior
         extend_system_message = """
         CRITICAL: You must follow ONLY these exact steps for each job:
         
-        1. Find and click the "+" button next to a job to expand its details
-        2. When expanded, look for the BLUE "Submit Resume" button specifically 
-           - It will be a blue clickable button with the text "Submit Resume"
-           - Use click_element_with_ctrl to open it in a new tab
+        1. Find a job title (usually in blue text) and use click_element_with_ctrl to open it in a new tab
+           - Look for job titles that are clickable links
+           - Use click_element_with_ctrl to open the job in a new tab
            - If that fails, try to find the direct URL and use open_url_in_new_tab
-        3. You should now be in a new tab with the application page
-        4. In this new tab, find and click the green "Continue" button
-        5. Find and click the blue "Submit" button
-        6. Use close_current_tab to return to the job listings
-        7. IMPORTANT: Click the "X" button that replaced the "+" button to collapse the job details
-        8. Move to the next job and repeat
+        2. You should now be in a new tab with the application page
+        3. In this new tab, find and click the green "Continue" button
+        4. Find and click the blue "Submit" button
+        5. Use close_current_tab to return to the job listings
+        6. Move to the next job title and repeat
         
         Pay special attention:
-        - Make sure you're clicking on the actual blue "Submit Resume" button
-        - After applying, be sure to click the "X" to collapse the job details before moving to the next job
-        - Only have one job expanded at a time
+        - Make sure you're clicking on the actual job title links
+        - Process one job at a time, completing all steps before moving to the next job
+        - Look for job titles that are clickable (usually in blue text)
         
         DO NOT attempt to fill out any forms or upload files.
         DO NOT try to be helpful by doing extra steps.
@@ -1209,21 +1281,6 @@ async def apply_to_apple_jobs(url: str, llm):
             # Get the structured result
             result = history.final_result()
             
-            # Get the list of jobs applied to
-            # applied_jobs = []
-            # for message in reversed(history.messages):
-            #     if hasattr(message, 'content') and "applied to" in message.content.lower():
-            #         for line in message.content.split('\n'):
-            #             if ":" in line and "applied to" not in line.lower():
-            #                 job_title = line.split(':')[1].strip()
-            #                 applied_jobs.append(job_title)
-            
-            # logger.info(f"Applied to {len(applied_jobs)} Apple jobs")
-            # print(f"Applied to {len(applied_jobs)} Apple jobs:")
-            # for job in applied_jobs:
-            #     print(f"- {job}")
-            
-            # return applied_jobs
     
     finally:
         # Close the browser
@@ -1365,237 +1422,6 @@ async def main():
         
         else:
             print("Invalid option. Please try again.")
-
-@controller.action('Close current tab')
-async def close_current_tab(browser: BrowserContext):
-    """Close the current tab and switch back to the previous tab."""
-    try:
-        page = await browser.get_current_page()
-        session = await browser.get_session()
-        
-        # Get the index of the current page
-        current_page_index = session.context.pages.index(page)
-        
-        # Close the current page
-        await page.close()
-        
-        # Switch to the previous tab if we just closed something other than the first tab
-        if current_page_index > 0:
-            await browser.switch_to_tab(current_page_index - 1)
-            
-        msg = "🚪 Closed current tab and switched to previous tab"
-        logger.info(msg)
-        return ActionResult(extracted_content=msg, include_in_memory=True)
-    except Exception as e:
-        error_msg = f"Error closing tab: {str(e)}"
-        logger.error(error_msg)
-        return ActionResult(error=error_msg)
-
-@controller.action('Click element with CTRL to open in new tab')
-async def click_element_with_ctrl(index: int, browser: BrowserContext):
-    """Click an element while holding CTRL to open it in a new tab."""
-    try:
-        if index not in await browser.get_selector_map():
-            return ActionResult(error=f'Element with index {index} does not exist')
-        
-        # Get the element node
-        element_node = await browser.get_dom_element_by_index(index)
-        
-        # Get the page
-        page = await browser.get_current_page()
-        session = await browser.get_session()
-        initial_pages = len(session.context.pages)
-        
-        # Get element details for better targeting
-        selector_info = await browser.get_selector_map()
-        selector = selector_info.get(index)
-        
-        if not selector:
-            return ActionResult(error=f'No selector found for index {index}')
-            
-        # Use the selector to find and click the element
-        try:
-            # Try clicking with CSS selector first
-            await page.locator(selector).click(modifiers=["Control"])
-        except Exception as css_error:
-            try:
-                # If CSS fails, try directly with playwright's click
-                element = await page.query_selector(f'[data-testid="element-{index}"]')
-                if element:
-                    await element.click(modifiers=["Control"])
-                else:
-                    # Last resort, try to navigate directly if it's an anchor
-                    href = await element_node.get_attribute("href")
-                    if href:
-                        # Open the href in a new tab
-                        await browser.create_new_tab(href)
-                    else:
-                        raise Exception(f"Could not find clickable element for index {index}")
-            except Exception as backup_error:
-                raise Exception(f"Failed both click methods: CSS error: {css_error}, Backup error: {backup_error}")
-        
-        # Wait for a moment to allow the new tab to open
-        await asyncio.sleep(3)
-        
-        # Check if a new tab was opened and switch to it
-        if len(session.context.pages) > initial_pages:
-            # Switch to the new tab
-            await browser.switch_to_tab(-1)
-            msg = f'🔗 Clicked element with index {index} with CTRL key to open in new tab and switched to it'
-        else:
-            msg = f'🖱️ Clicked element with index {index} with CTRL key but no new tab opened'
-        
-        logger.info(msg)
-        return ActionResult(extracted_content=msg, include_in_memory=True)
-    except Exception as e:
-        error_msg = f"Error clicking element with CTRL: {str(e)}"
-        logger.error(error_msg)
-        return ActionResult(error=error_msg)
-
-@controller.action('Open specific URL in new tab')
-async def open_url_in_new_tab(url: str, browser: BrowserContext):
-    """Open a specific URL in a new tab as a fallback."""
-    try:
-        # Create a new tab with the specified URL
-        await browser.create_new_tab(url)
-        
-        # Switch to the new tab (it should be the last one)
-        await browser.switch_to_tab(-1)
-        
-        msg = f'🔗 Opened {url} in a new tab and switched to it'
-        logger.info(msg)
-        return ActionResult(extracted_content=msg, include_in_memory=True)
-    except Exception as e:
-        error_msg = f"Error opening URL in new tab: {str(e)}"
-        logger.error(error_msg)
-        return ActionResult(error=error_msg)
-
-async def apply_to_apple_jobs(url: str, llm):
-    """
-    Specifically optimized for applying to Apple jobs from their careers site.
-    This function does a simple sequence:
-    1. Click "+" to expand job
-    2. Use CTRL+Click on "Submit Resume" to open in a new tab
-    3. Click green "Continue" button in the new tab
-    4. Click blue "Submit" button
-    5. Close tab and return to jobs listing
-    6. Click "X" to collapse the job details
-    7. Move to the next job and repeat
-    """
-    logger.info(f"Starting Apple job application process from: {url}")
-    
-    # Create browser instance
-    viewport_width, viewport_height = 1200, 900
-    start_x, start_y = 1920, 0
-    browser = Browser(
-        config=BrowserConfig(
-            disable_security=True,
-            headless=False,
-            extra_chromium_args=[
-                "--force-dark-mode",
-                "--enable-features=WebContentsForceDark",
-                f"--window-position={start_x},{start_y}",
-                f"--window-size={viewport_width},{viewport_height}"
-            ]
-        )
-    )
-
-    try:
-        # Define the task for the agent - make it extremely focused and simple
-        task_description = """
-        Apply to multiple Apple job listings by following ONLY these exact steps for each job:
-        
-        1. Click the "+" button next to a job to expand its details
-        2. When job details appear, look specifically for the blue "Submit Resume" button
-           - Use click_element_with_ctrl to open it in a new tab
-           - If that fails, find the URL from the button and use open_url_in_new_tab
-        3. In the new tab, look for and click the green "Continue" button
-        4. Look for and click the blue "Submit" button
-        5. Use close_current_tab to return to the jobs listing
-        6. Important: Click the "X" button (it's in the same place where the "+" was) to collapse the job details
-        7. Move to the next job with a "+" button and repeat
-        
-        DO NOT:
-        - Fill out any forms
-        - Upload any files
-        - Click any other buttons or links
-        - Attempt to do anything else
-        
-        JUST follow the exact sequence of clicking those specific buttons in order.
-        
-        Keep track of which jobs you've applied to and report them when done.
-        """
-
-        # Initial actions for the agent
-        initial_actions = [
-            {'go_to_url': {'url': url}},
-            {'wait': {'seconds': 15}}  # Give more time for the page to fully load
-        ]
-        
-        # Define a system message to reinforce the focused behavior
-        extend_system_message = """
-        CRITICAL: You must follow ONLY these exact steps for each job:
-        
-        1. Find and click the "+" button next to a job to expand its details
-        2. When expanded, look for the BLUE "Submit Resume" button specifically 
-           - It will be a blue clickable button with the text "Submit Resume"
-           - Use click_element_with_ctrl to open it in a new tab
-           - If that fails, try to find the direct URL and use open_url_in_new_tab
-        3. You should now be in a new tab with the application page
-        4. In this new tab, find and click the green "Continue" button
-        5. Find and click the blue "Submit" button
-        6. Use close_current_tab to return to the job listings
-        7. IMPORTANT: Click the "X" button that replaced the "+" button to collapse the job details
-        8. Move to the next job and repeat
-        
-        Pay special attention:
-        - Make sure you're clicking on the actual blue "Submit Resume" button
-        - After applying, be sure to click the "X" to collapse the job details before moving to the next job
-        - Only have one job expanded at a time
-        
-        DO NOT attempt to fill out any forms or upload files.
-        DO NOT try to be helpful by doing extra steps.
-        ONLY perform the exact clicks in the exact order specified.
-        
-        Keep track of the job titles you've applied to and report them at the end.
-        """
-        
-        # Create an agent to handle the applications
-        async with await browser.new_context() as browser_context:
-            agent = Agent(
-                task=task_description,
-                llm=llm,
-                initial_actions=initial_actions,
-                browser=browser,
-                browser_context=browser_context,
-                controller=controller,
-                extend_system_message=extend_system_message,
-                save_conversation_path=str(CONVERSATION_PATH)
-            )
-            
-            # Run the agent
-            history = await agent.run()
-            
-            # Get the list of jobs applied to
-            applied_jobs = []
-            for message in reversed(history.messages):
-                if hasattr(message, 'content') and "applied to" in message.content.lower():
-                    for line in message.content.split('\n'):
-                        if ":" in line and "applied to" not in line.lower():
-                            job_title = line.split(':')[1].strip()
-                            applied_jobs.append(job_title)
-            
-            logger.info(f"Applied to {len(applied_jobs)} Apple jobs")
-            print(f"Applied to {len(applied_jobs)} Apple jobs:")
-            for job in applied_jobs:
-                print(f"- {job}")
-            
-            return applied_jobs
-    
-    finally:
-        # Close the browser
-        await browser.close()
-        logger.info("Browser closed after applying to Apple jobs")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
