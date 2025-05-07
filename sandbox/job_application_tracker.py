@@ -74,7 +74,7 @@ class JobListing(BaseModel):
     job_title: str = Field(description="The title of the job position")
     apply_link: str = Field(description="URL link to apply for the job")
     company_name: str = Field(
-        default="SpaceX",
+        default="Apple",
         description="The name of the company offering the job"
     )
     location: Optional[str] = Field(
@@ -491,7 +491,7 @@ async def scrape_job_listings(url: str, llm) -> List[Job]:
         # Initial actions for the agent
         initial_actions = [
             {'go_to_url': {'url': url}},
-            {'wait': {'seconds': 5}}
+            {'wait': {'seconds': 10}}
         ]
         
         # Create an agent to scrape the job listings
@@ -1074,6 +1074,162 @@ def create_job_application_agent(job, llm_gemini, llm_openai, resume_data, brows
     
     return agent
 
+@controller.action('Close current tab')
+async def close_current_tab(browser: BrowserContext):
+    """Close the current tab and switch back to the previous tab."""
+    try:
+        page = await browser.get_current_page()
+        session = await browser.get_session()
+        
+        # Get the index of the current page
+        current_page_index = session.context.pages.index(page)
+        
+        # Close the current page
+        await page.close()
+        
+        # Switch to the previous tab if we just closed something other than the first tab
+        if current_page_index > 0:
+            await browser.switch_to_tab(current_page_index - 1)
+            
+        msg = "🚪 Closed current tab and switched to previous tab"
+        logger.info(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
+    except Exception as e:
+        error_msg = f"Error closing tab: {str(e)}"
+        logger.error(error_msg)
+        return ActionResult(error=error_msg)
+
+async def apply_to_apple_jobs(url: str, llm):
+    """
+    Specifically optimized for applying to Apple jobs from their careers site.
+    This function does a simple sequence:
+    1. Click "+" to expand job
+    2. Use CTRL+Click on "Submit Resume" to open in a new tab
+    3. Click green "Continue" button in the new tab
+    4. Click blue "Submit" button
+    5. Close tab and return to jobs listing
+    6. Click "X" to collapse the job details
+    7. Move to the next job and repeat
+    """
+    logger.info(f"Starting Apple job application process from: {url}")
+    
+    # Create browser instance
+    viewport_width, viewport_height = 1200, 900
+    start_x, start_y = 1920, 0
+    browser = Browser(
+        config=BrowserConfig(
+            disable_security=True,
+            headless=False,
+            chrome_instance_path=CHROME_PATH,
+            extra_chromium_args=[
+                "--force-dark-mode",
+                "--enable-features=WebContentsForceDark",
+                f"--window-position={start_x},{start_y}",
+                f"--window-size={viewport_width},{viewport_height}"
+            ]
+        )
+    )
+
+    try:
+        # Define the task for the agent - make it extremely focused and simple
+        task_description = """
+        Apply to multiple Apple job listings by following ONLY these exact steps for each job:
+        
+        1. Click the "+" button next to a job to expand its details
+        2. When job details appear, look specifically for the blue "Submit Resume" button
+           - Use click_element_with_ctrl to open it in a new tab
+           - If that fails, find the URL from the button and use open_url_in_new_tab
+        3. In the new tab, look for and click the green "Continue" button
+        4. Look for and click the blue "Submit" button
+        5. Use close_current_tab to return to the jobs listing
+        6. Important: Click the "X" button (it's in the same place where the "+" was) to collapse the job details
+        7. Move to the next job with a "+" button and repeat
+        
+        DO NOT:
+        - Fill out any forms
+        - Upload any files
+        - Click any other buttons or links
+        - Attempt to do anything else
+        
+        JUST follow the exact sequence of clicking those specific buttons in order.
+        
+        Keep track of which jobs you've applied to and report them when done.
+        """
+
+        # Initial actions for the agent
+        initial_actions = [
+            {'go_to_url': {'url': url}},
+            {'wait': {'seconds': 15}}  # Give more time for the page to fully load
+        ]
+        
+        # Define a system message to reinforce the focused behavior
+        extend_system_message = """
+        CRITICAL: You must follow ONLY these exact steps for each job:
+        
+        1. Find and click the "+" button next to a job to expand its details
+        2. When expanded, look for the BLUE "Submit Resume" button specifically 
+           - It will be a blue clickable button with the text "Submit Resume"
+           - Use click_element_with_ctrl to open it in a new tab
+           - If that fails, try to find the direct URL and use open_url_in_new_tab
+        3. You should now be in a new tab with the application page
+        4. In this new tab, find and click the green "Continue" button
+        5. Find and click the blue "Submit" button
+        6. Use close_current_tab to return to the job listings
+        7. IMPORTANT: Click the "X" button that replaced the "+" button to collapse the job details
+        8. Move to the next job and repeat
+        
+        Pay special attention:
+        - Make sure you're clicking on the actual blue "Submit Resume" button
+        - After applying, be sure to click the "X" to collapse the job details before moving to the next job
+        - Only have one job expanded at a time
+        
+        DO NOT attempt to fill out any forms or upload files.
+        DO NOT try to be helpful by doing extra steps.
+        ONLY perform the exact clicks in the exact order specified.
+        
+        Keep track of the job titles you've applied to and report them at the end.
+        """
+        
+        # Create an agent to handle the applications
+        async with await browser.new_context() as browser_context:
+            agent = Agent(
+                task=task_description,
+                llm=llm,
+                initial_actions=initial_actions,
+                browser=browser,
+                browser_context=browser_context,
+                controller=controller,
+                extend_system_message=extend_system_message
+            )
+            
+            # Run the agent
+            history = await agent.run()
+
+            scraped_output = history.extracted_content()
+            # Get the structured result
+            result = history.final_result()
+            
+            # Get the list of jobs applied to
+            # applied_jobs = []
+            # for message in reversed(history.messages):
+            #     if hasattr(message, 'content') and "applied to" in message.content.lower():
+            #         for line in message.content.split('\n'):
+            #             if ":" in line and "applied to" not in line.lower():
+            #                 job_title = line.split(':')[1].strip()
+            #                 applied_jobs.append(job_title)
+            
+            # logger.info(f"Applied to {len(applied_jobs)} Apple jobs")
+            # print(f"Applied to {len(applied_jobs)} Apple jobs:")
+            # for job in applied_jobs:
+            #     print(f"- {job}")
+            
+            # return applied_jobs
+    
+    finally:
+        # Close the browser
+        await browser.close()
+        logger.info("Browser closed after applying to Apple jobs")
+
 # Main application function
 async def main():
     # Initialize the models
@@ -1125,8 +1281,9 @@ async def main():
         print("2. Apply to jobs in parallel")
         print("3. View jobs to apply")
         print("4. View applied jobs")
-        print("5. Exit")
-        choice = input("\nSelect an option (1-5): ")
+        print("5. Apply to Apple jobs (Simple Click)")
+        print("6. Exit")
+        choice = input("\nSelect an option (1-6): ")
         
         if choice == "1":
             # Scrape new job listings
@@ -1197,6 +1354,11 @@ async def main():
                 print(f"{i:<4} | {job.title[:28]:<30} | {job.company[:18]:<20} | {job.location[:18]:<20}")
         
         elif choice == "5":
+            # Apply to Apple jobs with the simple click flow
+            url = input("Enter Apple jobs search URL: ")
+            await apply_to_apple_jobs(url, llm_gemini_tool_use)
+        
+        elif choice == "6":
             # Exit
             print("Exiting application. Goodbye!")
             break
@@ -1204,430 +1366,236 @@ async def main():
         else:
             print("Invalid option. Please try again.")
 
-@controller_dropdown.action('Fill Greenhouse dropdown field')
-async def fill_greenhouse_dropdown(field_label: str, option_text: str, browser: BrowserContext):
-    """
-    Fill a Greenhouse.io dropdown field by its label and option text.
-    
-    Args:
-        field_label: The label text of the field (e.g., "Gender", "Veteran Status")
-        option_text: The text of the option to select
-        browser: The browser context
-    """
-    logger.info(f"Filling Greenhouse dropdown: {field_label} with value: {option_text}")
-    
+@controller.action('Close current tab')
+async def close_current_tab(browser: BrowserContext):
+    """Close the current tab and switch back to the previous tab."""
     try:
         page = await browser.get_current_page()
+        session = await browser.get_session()
         
-        # Step 1: Find the dropdown container by its label (using partial text match)
-        # Create a shorter version of the label for matching
-        short_label = field_label.split(' - ')[0] if ' - ' in field_label else field_label
-        if len(short_label) > 30:
-            short_label = short_label[:30]  # Use first 30 chars for very long labels
+        # Get the index of the current page
+        current_page_index = session.context.pages.index(page)
         
-        label_selector = f"label:text-matches('{short_label}', 'i')"
-        label_elements = await page.query_selector_all(label_selector)
+        # Close the current page
+        await page.close()
         
-        if not label_elements:
-            # Try a more general approach
-            all_labels = await page.query_selector_all('label')
-            label_element = None
+        # Switch to the previous tab if we just closed something other than the first tab
+        if current_page_index > 0:
+            await browser.switch_to_tab(current_page_index - 1)
             
-            for label in all_labels:
-                text = await label.text_content()
-                if text and short_label.lower() in text.lower():
-                    label_element = label
-                    break
-                    
-            if not label_element:
-                return ActionResult(error=f"Could not find field with label containing '{short_label}'")
-        else:
-            label_element = label_elements[0]
-        
-        # Get the ID from the label's for attribute
-        field_id = await label_element.get_attribute('for')
-        
-        # Step 2: Click the dropdown to open it
-        if field_id:
-            dropdown_selector = f"#{field_id}"
-            dropdown = await page.query_selector(dropdown_selector)
-        else:
-            # Try to find the dropdown near the label
-            dropdown = await label_element.evaluate('el => el.closest(".field")?.querySelector(".select-selected, [role=combobox], select, .dropdown")')
-        
-        if not dropdown:
-            # Try to find any clickable element near the label
-            dropdown = await label_element.evaluate('el => el.closest(".field")?.querySelector("div[class*=select], div[class*=dropdown], button")')
-        
-        if not dropdown:
-            return ActionResult(error=f"Could not find dropdown for field '{short_label}'")
-        
-        await dropdown.click()
-        await asyncio.sleep(0.5)  # Small delay to let the dropdown open
-        
-        # Step 3: Find and click the option
-        option_selectors = [
-            f"div[role='option']:text-matches('{option_text}', 'i')",
-            f"li[role='option']:text-matches('{option_text}', 'i')",
-            f".select-items div:text-matches('{option_text}', 'i')",
-            f".dropdown-menu li:text-matches('{option_text}', 'i')"
-        ]
-        
-        for selector in option_selectors:
-            try:
-                options = await page.query_selector_all(selector)
-                if options:
-                    await options[0].click()
-                    logger.info(f"Selected '{option_text}' for field '{short_label}'")
-                    return ActionResult(
-                        extracted_content=f"Selected '{option_text}' for field '{short_label}'",
-                        include_in_memory=True
-                    )
-            except Exception as e:
-                logger.debug(f"Selector {selector} failed: {str(e)}")
-        
-        # If we get here, try a more general approach - find any element containing the option text
-        all_elements = await page.query_selector_all('div, li, span')
-        for element in all_elements:
-            try:
-                text = await element.text_content()
-                if text and option_text.lower() in text.lower():
-                    await element.click()
-                    logger.info(f"Selected element with text '{text}'")
-                    return ActionResult(
-                        extracted_content=f"Selected element with text '{text}' from dropdown",
-                        include_in_memory=True
-                    )
-            except Exception:
-                continue
-        
-        return ActionResult(
-            error=f"Could not find option '{option_text}' for field '{short_label}'",
-            include_in_memory=True
-        )
-        
+        msg = "🚪 Closed current tab and switched to previous tab"
+        logger.info(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
     except Exception as e:
-        error_msg = f"Error filling Greenhouse dropdown: {str(e)}"
+        error_msg = f"Error closing tab: {str(e)}"
         logger.error(error_msg)
         return ActionResult(error=error_msg)
 
-@controller_dropdown.action('Handle custom dropdown selection (for React/modern dropdowns)')
-async def handle_custom_dropdown(dropdown_index: int, option_text: str, browser: BrowserContext):
-    """
-    Handle selection in modern custom dropdowns (like React Select or Select2) that aren't standard HTML select elements.
-    
-    Args:
-        dropdown_index: The index of the dropdown trigger element
-        option_text: The text of the option to select
-        browser: The browser context
-    """
-    logger.info(f"Handling custom dropdown at index {dropdown_index}, selecting '{option_text}'")
-    
+@controller.action('Click element with CTRL to open in new tab')
+async def click_element_with_ctrl(index: int, browser: BrowserContext):
+    """Click an element while holding CTRL to open it in a new tab."""
     try:
+        if index not in await browser.get_selector_map():
+            return ActionResult(error=f'Element with index {index} does not exist')
+        
+        # Get the element node
+        element_node = await browser.get_dom_element_by_index(index)
+        
+        # Get the page
         page = await browser.get_current_page()
+        session = await browser.get_session()
+        initial_pages = len(session.context.pages)
         
-        # Step 1: Get the dropdown element by index
-        dom_el = await browser.get_dom_element_by_index(dropdown_index)
-        if dom_el is None:
-            return ActionResult(error=f"No element found at index {dropdown_index}")
+        # Get element details for better targeting
+        selector_info = await browser.get_selector_map()
+        selector = selector_info.get(index)
         
-        dropdown_el = await browser.get_locate_element(dom_el)
-        if dropdown_el is None:
-            return ActionResult(error=f"Could not locate dropdown element at index {dropdown_index}")
-        
-        # Get element information to determine its type
-        tag_name = await dropdown_el.evaluate('el => el.tagName.toLowerCase()')
-        class_name = await dropdown_el.evaluate('el => el.className') or ""
-        
-        # Check if it's a Select2 dropdown
-        is_select2 = 'select2' in class_name or await dropdown_el.evaluate('el => !!document.querySelector("#s2id_" + el.id)')
-        
-        if is_select2:
-            # Handle Select2 dropdown
+        if not selector:
+            return ActionResult(error=f'No selector found for index {index}')
             
-            # Get the Select2 container
-            select2_container = None
-            
-            # Try to find by associated s2id element
-            select_id = await dropdown_el.get_attribute('id')
-            if select_id:
-                select2_container = await page.query_selector(f"#s2id_{select_id}")
-            
-            if not select2_container:
-                # Try to find near the dropdown
-                select2_container = await dropdown_el.evaluate('el => el.closest(".field")?.querySelector(".select2-container")')
-            
-            if select2_container:
-                # Click on the Select2 container to open the dropdown
-                await select2_container.click()
-                await asyncio.sleep(0.5)  # Wait for dropdown to open
-                
-                # Find and click the option
-                # First try the Select2 results list
-                option_found = False
-                
-                # Try to find the option in the results dropdown
-                try:
-                    # Find all result items
-                    results = await page.query_selector_all('.select2-results li, .select2-result')
-                    
-                    for result in results:
-                        try:
-                            text = await result.text_content()
-                            if text and option_text.lower() in text.lower():
-                                await result.click()
-                                logger.info(f"Selected Select2 option: '{text}'")
-                                option_found = True
-                                break
-                        except Exception:
-                            continue
-                    
-                    # If option still not found, try searching
-                    if not option_found:
-                        # Try to find and use the search input
-                        search_input = await page.query_selector('.select2-search input, input.select2-input')
-                        if search_input:
-                            await search_input.fill(option_text)
-                            await asyncio.sleep(0.5)
-                            
-                            # Try to find the option again after search
-                            results = await page.query_selector_all('.select2-results li, .select2-result')
-                            for result in results:
-                                try:
-                                    text = await result.text_content()
-                                    if text and option_text.lower() in text.lower():
-                                        await result.click()
-                                        logger.info(f"Selected Select2 option after search: '{text}'")
-                                        option_found = True
-                                        break
-                                except Exception:
-                                    continue
-                    
-                    if option_found:
-                        return ActionResult(
-                            extracted_content=f"Selected '{option_text}' from Select2 dropdown",
-                            include_in_memory=True
-                        )
-                                
-                except Exception as e:
-                    logger.debug(f"Select2 result selection failed: {str(e)}")
-            
-            # If Select2 handling failed, try direct selection of the underlying select element
-            if tag_name == 'select':
-                # It's a standard select element, so we can use the built-in select functionality
-                try:
-                    await dropdown_el.select_option({'label': option_text})
-                    logger.info(f"Selected option '{option_text}' directly from select element")
-                    return ActionResult(
-                        extracted_content=f"Selected '{option_text}' directly from select element",
-                        include_in_memory=True
-                    )
-                except Exception as e:
-                    logger.debug(f"Direct select option failed: {str(e)}")
-                    
-                    # Try by value if label doesn't work
-                    try:
-                        # Get all options
-                        options = await dropdown_el.evaluate('''el => {
-                            return Array.from(el.options).map(option => {
-                                return {
-                                    value: option.value,
-                                    text: option.text
-                                };
-                            });
-                        }''')
-                        
-                        target_value = None
-                        for option in options:
-                            if option_text.lower() in option['text'].lower():
-                                target_value = option['value']
-                                break
-                                
-                        if target_value:
-                            await dropdown_el.select_option({'value': target_value})
-                            logger.info(f"Selected option by value: '{target_value}'")
-                            return ActionResult(
-                                extracted_content=f"Selected option '{option_text}' by value",
-                                include_in_memory=True
-                            )
-                    except Exception as e:
-                        logger.debug(f"Value-based selection failed: {str(e)}")
-        
-        # Standard approach for other dropdown types - try clicking first
-        if tag_name != 'select':  # Skip for select elements as we already tried that
+        # Use the selector to find and click the element
+        try:
+            # Try clicking with CSS selector first
+            await page.locator(selector).click(modifiers=["Control"])
+        except Exception as css_error:
             try:
-                # Click to open the dropdown
-                await dropdown_el.click()
-                await asyncio.sleep(0.5)  # Wait for dropdown to open
-                
-                # Try different selectors that are commonly used for dropdown options
-                option_selectors = [
-                    f"div[role='option']:text-matches('{option_text}', 'i')",
-                    f"li[role='option']:text-matches('{option_text}', 'i')",
-                    f".select__option:text-matches('{option_text}', 'i')",
-                    f"[id*='react-select'][id*='option']:text-matches('{option_text}', 'i')",
-                    f".select-items div:text-matches('{option_text}', 'i')",
-                    f".dropdown-menu li:text-matches('{option_text}', 'i')"
-                ]
-                
-                for selector in option_selectors:
-                    try:
-                        options = await page.query_selector_all(selector)
-                        if options:
-                            await options[0].click()
-                            logger.info(f"Successfully selected option '{option_text}' from dropdown")
-                            return ActionResult(
-                                extracted_content=f"Selected '{option_text}' from dropdown at index {dropdown_index}",
-                                include_in_memory=True
-                            )
-                    except Exception as e:
-                        logger.debug(f"Selector {selector} failed: {str(e)}")
-                
-                # More general approach - find any visible element with matching text
-                all_elements = await page.query_selector_all('div, li, span, option')
-                for element in all_elements:
-                    try:
-                        text = await element.text_content()
-                        if text and option_text.lower() in text.lower():
-                            is_visible = await element.is_visible()
-                            if is_visible:
-                                await element.click()
-                                logger.info(f"Selected element with text '{text}'")
-                                return ActionResult(
-                                    extracted_content=f"Selected element with text '{text}' from dropdown",
-                                    include_in_memory=True
-                                )
-                    except Exception:
-                        continue
-            except Exception as e:
-                logger.debug(f"Standard dropdown approach failed: {str(e)}")
+                # If CSS fails, try directly with playwright's click
+                element = await page.query_selector(f'[data-testid="element-{index}"]')
+                if element:
+                    await element.click(modifiers=["Control"])
+                else:
+                    # Last resort, try to navigate directly if it's an anchor
+                    href = await element_node.get_attribute("href")
+                    if href:
+                        # Open the href in a new tab
+                        await browser.create_new_tab(href)
+                    else:
+                        raise Exception(f"Could not find clickable element for index {index}")
+            except Exception as backup_error:
+                raise Exception(f"Failed both click methods: CSS error: {css_error}, Backup error: {backup_error}")
         
-        # If we get here and the element is a select, try the most direct approach
-        if tag_name == 'select':
-            try:
-                # Try selecting by directly modifying the value
-                await dropdown_el.evaluate(f'''(el) => {{
-                    // Find the option with matching text
-                    for (let i = 0; i < el.options.length; i++) {{
-                        if (el.options[i].text.toLowerCase().includes('{option_text.lower()}')) {{
-                            el.selectedIndex = i;
-                            const event = new Event('change', {{ bubbles: true }});
-                            el.dispatchEvent(event);
-                            return true;
-                        }}
-                    }}
-                    return false;
-                }}''')
-                
-                logger.info(f"Selected option '{option_text}' via direct JavaScript")
-                return ActionResult(
-                    extracted_content=f"Selected '{option_text}' via direct JavaScript",
-                    include_in_memory=True
-                )
-            except Exception as e:
-                logger.debug(f"Direct JavaScript selection failed: {str(e)}")
+        # Wait for a moment to allow the new tab to open
+        await asyncio.sleep(3)
         
-        # If we get here, we couldn't find the option
-        return ActionResult(
-            error=f"Could not find option '{option_text}' in the dropdown",
-            include_in_memory=True
-        )
+        # Check if a new tab was opened and switch to it
+        if len(session.context.pages) > initial_pages:
+            # Switch to the new tab
+            await browser.switch_to_tab(-1)
+            msg = f'🔗 Clicked element with index {index} with CTRL key to open in new tab and switched to it'
+        else:
+            msg = f'🖱️ Clicked element with index {index} with CTRL key but no new tab opened'
         
+        logger.info(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
     except Exception as e:
-        error_msg = f"Error handling custom dropdown: {str(e)}"
+        error_msg = f"Error clicking element with CTRL: {str(e)}"
         logger.error(error_msg)
         return ActionResult(error=error_msg)
 
-@controller_dropdown.action('Fill profile URLs (LinkedIn/Website)')
-async def fill_profile_urls(linkedin_url: str, website_url: str, browser: BrowserContext):
-    """
-    Fill LinkedIn and website fields by finding them based on their labels.
-    
-    Args:
-        linkedin_url: The LinkedIn profile URL
-        website_url: The website URL (GitHub or personal site)
-        browser: The browser context
-    """
-    logger.info(f"Filling profile URLs: LinkedIn={linkedin_url}, Website={website_url}")
-    
+@controller.action('Open specific URL in new tab')
+async def open_url_in_new_tab(url: str, browser: BrowserContext):
+    """Open a specific URL in a new tab as a fallback."""
     try:
-        page = await browser.get_current_page()
+        # Create a new tab with the specified URL
+        await browser.create_new_tab(url)
         
-        # Find LinkedIn field
-        linkedin_selectors = [
-            "input[id*='linkedin' i]",
-            "input[name*='linkedin' i]",
-            "input[placeholder*='linkedin' i]",
-            "label:text-matches('LinkedIn', 'i') + input",
-            "label:text-matches('LinkedIn', 'i')"
-        ]
+        # Switch to the new tab (it should be the last one)
+        await browser.switch_to_tab(-1)
         
-        linkedin_field = None
-        for selector in linkedin_selectors:
-            try:
-                elements = await page.query_selector_all(selector)
-                if elements:
-                    linkedin_field = elements[0]
-                    break
-            except Exception:
-                continue
-                
-        if linkedin_field:
-            # If we found a label, get the associated input
-            if await linkedin_field.evaluate('el => el.tagName.toLowerCase()') == 'label':
-                field_id = await linkedin_field.get_attribute('for')
-                if field_id:
-                    linkedin_field = await page.query_selector(f"#{field_id}")
-                else:
-                    # Try to find the input near the label
-                    linkedin_field = await linkedin_field.evaluate('el => el.closest(".field")?.querySelector("input")')
-            
-            if linkedin_field:
-                await linkedin_field.fill(linkedin_url)
-                logger.info(f"Successfully filled LinkedIn URL: {linkedin_url}")
-        
-        # Find Website field
-        website_selectors = [
-            "input[id*='website' i]",
-            "input[name*='website' i]",
-            "input[placeholder*='website' i]",
-            "label:text-matches('Website', 'i') + input",
-            "label:text-matches('Website', 'i')"
-        ]
-        
-        website_field = None
-        for selector in website_selectors:
-            try:
-                elements = await page.query_selector_all(selector)
-                if elements:
-                    website_field = elements[0]
-                    break
-            except Exception:
-                continue
-                
-        if website_field:
-            # If we found a label, get the associated input
-            if await website_field.evaluate('el => el.tagName.toLowerCase()') == 'label':
-                field_id = await website_field.get_attribute('for')
-                if field_id:
-                    website_field = await page.query_selector(f"#{field_id}")
-                else:
-                    # Try to find the input near the label
-                    website_field = await website_field.evaluate('el => el.closest(".field")?.querySelector("input")')
-            
-            if website_field:
-                await website_field.fill(website_url)
-                logger.info(f"Successfully filled Website URL: {website_url}")
-        
-        return ActionResult(
-            extracted_content=f"Filled LinkedIn URL: {linkedin_url if linkedin_field else 'Not found'}, Website URL: {website_url if website_field else 'Not found'}",
-            include_in_memory=True
-        )
-        
+        msg = f'🔗 Opened {url} in a new tab and switched to it'
+        logger.info(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
     except Exception as e:
-        error_msg = f"Error filling profile URLs: {str(e)}"
+        error_msg = f"Error opening URL in new tab: {str(e)}"
         logger.error(error_msg)
         return ActionResult(error=error_msg)
+
+async def apply_to_apple_jobs(url: str, llm):
+    """
+    Specifically optimized for applying to Apple jobs from their careers site.
+    This function does a simple sequence:
+    1. Click "+" to expand job
+    2. Use CTRL+Click on "Submit Resume" to open in a new tab
+    3. Click green "Continue" button in the new tab
+    4. Click blue "Submit" button
+    5. Close tab and return to jobs listing
+    6. Click "X" to collapse the job details
+    7. Move to the next job and repeat
+    """
+    logger.info(f"Starting Apple job application process from: {url}")
+    
+    # Create browser instance
+    viewport_width, viewport_height = 1200, 900
+    start_x, start_y = 1920, 0
+    browser = Browser(
+        config=BrowserConfig(
+            disable_security=True,
+            headless=False,
+            extra_chromium_args=[
+                "--force-dark-mode",
+                "--enable-features=WebContentsForceDark",
+                f"--window-position={start_x},{start_y}",
+                f"--window-size={viewport_width},{viewport_height}"
+            ]
+        )
+    )
+
+    try:
+        # Define the task for the agent - make it extremely focused and simple
+        task_description = """
+        Apply to multiple Apple job listings by following ONLY these exact steps for each job:
+        
+        1. Click the "+" button next to a job to expand its details
+        2. When job details appear, look specifically for the blue "Submit Resume" button
+           - Use click_element_with_ctrl to open it in a new tab
+           - If that fails, find the URL from the button and use open_url_in_new_tab
+        3. In the new tab, look for and click the green "Continue" button
+        4. Look for and click the blue "Submit" button
+        5. Use close_current_tab to return to the jobs listing
+        6. Important: Click the "X" button (it's in the same place where the "+" was) to collapse the job details
+        7. Move to the next job with a "+" button and repeat
+        
+        DO NOT:
+        - Fill out any forms
+        - Upload any files
+        - Click any other buttons or links
+        - Attempt to do anything else
+        
+        JUST follow the exact sequence of clicking those specific buttons in order.
+        
+        Keep track of which jobs you've applied to and report them when done.
+        """
+
+        # Initial actions for the agent
+        initial_actions = [
+            {'go_to_url': {'url': url}},
+            {'wait': {'seconds': 15}}  # Give more time for the page to fully load
+        ]
+        
+        # Define a system message to reinforce the focused behavior
+        extend_system_message = """
+        CRITICAL: You must follow ONLY these exact steps for each job:
+        
+        1. Find and click the "+" button next to a job to expand its details
+        2. When expanded, look for the BLUE "Submit Resume" button specifically 
+           - It will be a blue clickable button with the text "Submit Resume"
+           - Use click_element_with_ctrl to open it in a new tab
+           - If that fails, try to find the direct URL and use open_url_in_new_tab
+        3. You should now be in a new tab with the application page
+        4. In this new tab, find and click the green "Continue" button
+        5. Find and click the blue "Submit" button
+        6. Use close_current_tab to return to the job listings
+        7. IMPORTANT: Click the "X" button that replaced the "+" button to collapse the job details
+        8. Move to the next job and repeat
+        
+        Pay special attention:
+        - Make sure you're clicking on the actual blue "Submit Resume" button
+        - After applying, be sure to click the "X" to collapse the job details before moving to the next job
+        - Only have one job expanded at a time
+        
+        DO NOT attempt to fill out any forms or upload files.
+        DO NOT try to be helpful by doing extra steps.
+        ONLY perform the exact clicks in the exact order specified.
+        
+        Keep track of the job titles you've applied to and report them at the end.
+        """
+        
+        # Create an agent to handle the applications
+        async with await browser.new_context() as browser_context:
+            agent = Agent(
+                task=task_description,
+                llm=llm,
+                initial_actions=initial_actions,
+                browser=browser,
+                browser_context=browser_context,
+                controller=controller,
+                extend_system_message=extend_system_message,
+                save_conversation_path=str(CONVERSATION_PATH)
+            )
+            
+            # Run the agent
+            history = await agent.run()
+            
+            # Get the list of jobs applied to
+            applied_jobs = []
+            for message in reversed(history.messages):
+                if hasattr(message, 'content') and "applied to" in message.content.lower():
+                    for line in message.content.split('\n'):
+                        if ":" in line and "applied to" not in line.lower():
+                            job_title = line.split(':')[1].strip()
+                            applied_jobs.append(job_title)
+            
+            logger.info(f"Applied to {len(applied_jobs)} Apple jobs")
+            print(f"Applied to {len(applied_jobs)} Apple jobs:")
+            for job in applied_jobs:
+                print(f"- {job}")
+            
+            return applied_jobs
+    
+    finally:
+        # Close the browser
+        await browser.close()
+        logger.info("Browser closed after applying to Apple jobs")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
