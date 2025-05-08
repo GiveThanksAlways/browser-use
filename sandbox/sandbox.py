@@ -15,14 +15,12 @@ SANDBOX_PATH = Path(__file__).parent
 RESUME_PATH = SANDBOX_PATH / 'resume.json'
 PDF_RESUME_PATH = SANDBOX_PATH / 'Resume_Spencer_Willett.pdf'
 SCRIPT_PATH = SANDBOX_PATH / 'fill_application_script.py'
-MODIFIED_SCRIPT_PATH = SANDBOX_PATH / 'modified_fill_application_script.py'
 
 controller = Controller()
 
-# Create a single browser instance for all jobs
 viewport_width, viewport_height = 1000, 1000
 start_x, start_y = 1920, 0
-viewport_expansion_pixels = 500  # -1
+viewport_expansion_pixels = -1
 browser = Browser(
 	config=BrowserConfig(
 		disable_security=True,
@@ -31,7 +29,7 @@ browser = Browser(
 			'--force-dark-mode',
 			'--enable-features=WebContentsForceDark',
 			f'--window-position={start_x},{start_y}',
-			f'--window-size={viewport_width},{viewport_height}',  # This sets the actual window size of Chrome
+			f'--window-size={viewport_width},{viewport_height}',
 		],
 		new_context_config=BrowserContextConfig(
 			browser_window_size={'width': viewport_width, 'height': viewport_height},
@@ -42,31 +40,22 @@ browser = Browser(
 )
 
 
-@controller.action('Upload resume - call this function to uploade the resume to the attach or upload button')
+@controller.action('Upload resume - call this function to upload the resume to the attach or upload button')
 async def upload_resume(index: int, browser: BrowserContext):
-	"""Upload resume to a file upload element at the specified index."""
 	path = str(PDF_RESUME_PATH.absolute())
-
-	# Get the DOM element at the specified index
 	dom_el = await browser.get_dom_element_by_index(index)
 	if dom_el is None:
 		print(f'No element found at index {index}')
 		return ActionResult(error=f'No element found at index {index}')
-
-	# Get the file upload element
 	file_upload_dom_el = dom_el.get_file_upload_element()
 	if file_upload_dom_el is None:
 		print(f'No file upload element found at index {index}')
 		return ActionResult(error=f'No file upload element found at index {index}')
-
-	# Get the locatable element
 	file_upload_el = await browser.get_locate_element(file_upload_dom_el)
 	if file_upload_el is None:
 		print(f'Could not locate file upload element at index {index}')
 		return ActionResult(error=f'Could not locate file upload element at index {index}')
-
 	try:
-		# Upload the file
 		await file_upload_el.set_input_files(path)
 		success_msg = f'Successfully uploaded resume from "{path}" to element at index {index}'
 		print(success_msg)
@@ -77,72 +66,94 @@ async def upload_resume(index: int, browser: BrowserContext):
 		return ActionResult(error=error_msg)
 
 
-# Helper function to stream output from the subprocess
-async def stream_output(stream, prefix):
-	if stream is None:
-		print(f'{prefix}: (No stream available)')
-		return
-	while True:
-		line = await stream.readline()
-		if not line:
-			break
-		print(f'{prefix}: {line.decode().rstrip()}', flush=True)
-
-
-async def fill_in_application(url, llm, resume_data):
-	initial_actions = [
-		{'go_to_url': {'url': url}},
-		{'wait': {'seconds': 5}},
-		# {'scroll_down': {'amount': 1000}},
-	]
-
-	task = """
-	1. Fill in as much of the job application as you can (Skip location!!!!!)
-	2. Use the upload_resume controller action to upload the resume (Look for the resume upload field named attach)
-	3. Do not submit the form
-	"""
-
-	# Create agent with Playwright script generation
-	agent = Agent(
-		task=task,
-		llm=llm,
-		use_vision=False,
-		message_context=f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}',
-		controller=controller,
-		browser=browser,
-		initial_actions=initial_actions,
-		save_playwright_script_path=str(SCRIPT_PATH),
-	)
-
-	# Run the agent to fill the form and generate the script
-	print('Running the agent to fill the form and generate the Playwright script...')
-	await agent.run()
-
-	print('Agent finished running.')
-	input('Press Enter to continue...')
-	await browser.close()
-
-
 async def main():
 	try:
-		# Load environment variables and resume data
 		load_dotenv()
 		api_key = os.getenv('GROK_API_KEY')
 
 		with open(RESUME_PATH, 'r', encoding='utf-8') as resume_file:
 			resume_data = json.load(resume_file)
 
-		# Initialize Grok model
-		llm = ChatOpenAI(base_url='https://api.x.ai/v1', model='grok-3-mini-beta', api_key=SecretStr(api_key))
+		llm = ChatOpenAI(base_url='https://api.x.ai/v1', model='grok-3-mini-fast-beta', api_key=SecretStr(api_key))
 
-		# Define the URL and task
-		list_of_url = ['https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply']
+		url = 'https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply'
 
-		for url in list_of_url:
-			await fill_in_application(url, llm, resume_data)
+		tasks = {
+			'1': 'Fill in name, email, phone number, GitHub, linkedIn, website (skip location). Do not submit the form.',
+			'2': 'Use the upload_resume controller action to upload the resume (look for the resume upload field named attach). Do not submit the form.',
+			'3': 'Fill in the job application with info from my resume (SKIP location, Do NOT Submit resume) and do not submit the form',
+			'4': 'Fill in the voluntary self-identification section. Do not submit the form.',
+		}
+
+		async with await browser.new_context(
+			config=BrowserContextConfig(
+				browser_window_size={'width': viewport_width, 'height': viewport_height},
+				viewport_expansion=viewport_expansion_pixels,
+				keep_alive=True,
+			)
+		) as context:
+			# Create a page and navigate once
+			page = await context.get_current_page()
+			await page.goto(url)
+			await page.wait_for_load_state('networkidle')
+
+			current_agent = None
+
+			while True:
+				print('\nSelect an option:')
+				for key, desc in tasks.items():
+					print(f'{key}. {desc}')
+				print('p. Pause current task')
+				print('r. Resume current task')
+				print('s. Stop current task')
+				print('q. Quit')
+
+				choice = await asyncio.to_thread(input, 'Enter your choice: ')
+
+				if choice in tasks:
+					if current_agent:
+						print('Stopping previous agent...')
+						current_agent.stop()
+						await asyncio.sleep(1)  # Give time for the agent to stop cleanly
+					task = tasks[choice]
+					message_context = f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}'
+					current_agent = Agent(
+						task=task,
+						llm=llm,
+						use_vision=False,
+						browser_context=context,
+						controller=controller,
+						message_context=message_context,
+						save_playwright_script_path=str(SCRIPT_PATH),
+					)
+					print(f'Starting task: {task}')
+					asyncio.create_task(current_agent.run())
+					await asyncio.sleep(1)  # Allow some time to see initial logs
+				elif choice == 'p':
+					if current_agent:
+						current_agent.pause()
+						print('Agent paused')
+				elif choice == 'r':
+					if current_agent:
+						current_agent.resume()
+						print('Agent resumed')
+				elif choice == 's':
+					if current_agent:
+						current_agent.stop()
+						current_agent = None
+						print('Agent stopped')
+				elif choice == 'q':
+					if current_agent:
+						current_agent.stop()
+					break
+				else:
+					print('Invalid choice')
 
 	except Exception as e:
 		print(f'An error occurred: {e}')
+
+	finally:
+		await browser.close()
 
 
 if __name__ == '__main__':
