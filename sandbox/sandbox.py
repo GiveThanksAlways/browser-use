@@ -25,17 +25,17 @@ browser = Browser(
 	config=BrowserConfig(
 		disable_security=True,
 		headless=False,
-		extra_chromium_args=[
+		extra_browser_args=[
 			'--force-dark-mode',
 			'--enable-features=WebContentsForceDark',
 			f'--window-position={start_x},{start_y}',
 			f'--window-size={viewport_width},{viewport_height}',
 		],
-		new_context_config=BrowserContextConfig(
-			browser_window_size={'width': viewport_width, 'height': viewport_height},
-			viewport_expansion=viewport_expansion_pixels,
-			keep_alive=True,
-		),
+		# new_context_config=BrowserContextConfig(
+		# 	browser_window_size={'width': viewport_width, 'height': viewport_height},
+		# 	viewport_expansion=viewport_expansion_pixels,
+		# 	keep_alive=True,
+		# ),
 	)
 )
 
@@ -82,7 +82,7 @@ async def main():
 			'1': 'Fill in name, email, phone number, GitHub, linkedIn, website (skip location). Do not submit the form.',
 			'2': 'Use the upload_resume controller action to upload the resume (look for the resume upload field named attach). Do not submit the form.',
 			'3': 'Fill in the job application with info from my resume (SKIP location, Do NOT Submit resume) and do not submit the form',
-			'4': 'Fill in the voluntary self-identification section. Do not submit the form.',
+			'4': 'Enter Name and Date at the bottom of the application. Do not submit the form.',
 		}
 
 		async with await browser.new_context(
@@ -114,7 +114,8 @@ async def main():
 					if current_agent:
 						print('Stopping previous agent...')
 						current_agent.stop()
-						await asyncio.sleep(1)  # Give time for the agent to stop cleanly
+						# Give time for the agent to stop cleanly
+						await asyncio.sleep(1)
 					task = tasks[choice]
 					message_context = f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}'
 					current_agent = Agent(
@@ -128,7 +129,8 @@ async def main():
 					)
 					print(f'Starting task: {task}')
 					asyncio.create_task(current_agent.run())
-					await asyncio.sleep(1)  # Allow some time to see initial logs
+					# Allow some time to see initial logs
+					await asyncio.sleep(1)
 				elif choice == 'p':
 					if current_agent:
 						current_agent.pause()
