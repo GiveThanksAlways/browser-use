@@ -149,6 +149,8 @@ async def run_generated_script():
             # Final Message from agent (may contain placeholders):
             final_message = replace_sensitive_data("Task completed successfully. I have navigated to the job application page at https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply and uploaded the resume 'Resume_Spencer_Willett.pdf' to the designated field. As per the instructions, I have not submitted the form.", SENSITIVE_DATA)
             print(final_message)
+            print("Browser will remain open. Press Ctrl+C to close.")
+            await asyncio.Event().wait()
         except PlaywrightActionError as pae:
             print(f'\n--- Playwright Action Error: {pae} ---', file=sys.stderr)
             exit_code = 1
