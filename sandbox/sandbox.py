@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,7 +22,7 @@ controller = Controller()
 # Create a single browser instance for all jobs
 viewport_width, viewport_height = 1000, 1000
 start_x, start_y = 1920, 0
-viewport_expansion_pixels = -1
+viewport_expansion_pixels = 500  # -1
 browser = Browser(
 	config=BrowserConfig(
 		disable_security=True,
@@ -35,7 +34,9 @@ browser = Browser(
 			f'--window-size={viewport_width},{viewport_height}',  # This sets the actual window size of Chrome
 		],
 		new_context_config=BrowserContextConfig(
-			browser_window_size={'width': viewport_width, 'height': viewport_height}, viewport_expansion=viewport_expansion_pixels
+			browser_window_size={'width': viewport_width, 'height': viewport_height},
+			viewport_expansion=viewport_expansion_pixels,
+			keep_alive=True,
 		),
 	)
 )
@@ -88,6 +89,40 @@ async def stream_output(stream, prefix):
 		print(f'{prefix}: {line.decode().rstrip()}', flush=True)
 
 
+async def fill_in_application(url, llm, resume_data):
+	initial_actions = [
+		{'go_to_url': {'url': url}},
+		{'wait': {'seconds': 5}},
+		# {'scroll_down': {'amount': 1000}},
+	]
+
+	task = """
+	1. Fill in as much of the job application as you can (Skip location!!!!!)
+	2. Use the upload_resume controller action to upload the resume (Look for the resume upload field named attach)
+	3. Do not submit the form
+	"""
+
+	# Create agent with Playwright script generation
+	agent = Agent(
+		task=task,
+		llm=llm,
+		use_vision=False,
+		message_context=f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}',
+		controller=controller,
+		browser=browser,
+		initial_actions=initial_actions,
+		save_playwright_script_path=str(SCRIPT_PATH),
+	)
+
+	# Run the agent to fill the form and generate the script
+	print('Running the agent to fill the form and generate the Playwright script...')
+	await agent.run()
+
+	print('Agent finished running.')
+	input('Press Enter to continue...')
+	await browser.close()
+
+
 async def main():
 	try:
 		# Load environment variables and resume data
@@ -101,77 +136,11 @@ async def main():
 		llm = ChatOpenAI(base_url='https://api.x.ai/v1', model='grok-3-mini-beta', api_key=SecretStr(api_key))
 
 		# Define the URL and task
-		url = 'https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply'
-		task = f"""
-        1. Go to {url}
-		2. Then use the upload_resume controller action to upload the resume (Look for the resume upload field named attach)
-		3. Fill in as much of the job application as you can
-        3. Do not submit the form
-        """
+		list_of_url = ['https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply']
 
-		# Create agent with Playwright script generation
-		agent = Agent(
-			task=task,
-			llm=llm,
-			use_vision=False,
-			message_context=f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}',
-			controller=controller,
-			browser=browser,
-			save_playwright_script_path=str(SCRIPT_PATH),
-		)
+		for url in list_of_url:
+			await fill_in_application(url, llm, resume_data)
 
-		# Run the agent to fill the form and generate the script
-		print('Running the agent to fill the form and generate the Playwright script...')
-		await agent.run()
-
-		print('Agent finished running.')
-		input('Press Enter to continue...')
-		await browser.close()
-
-		# Check if the script was generated
-		run_generated_script = False
-		if SCRIPT_PATH.exists() and run_generated_script:
-			print(f'Playwright script generated at: {SCRIPT_PATH}')
-
-			# Modify the generated script to keep the browser open
-			with open(SCRIPT_PATH, 'r', encoding='utf-8') as f:
-				lines = f.readlines()
-
-			# Find the index of the except line to insert waiting code before it
-			except_index = next(i for i, line in enumerate(lines) if 'except PlaywrightActionError as pae:' in line)
-
-			# Define the code to keep the browser open until Ctrl+C
-			waiting_code = [
-				'            print("Browser will remain open. Press Ctrl+C to close.")\n',
-				'            await asyncio.Event().wait()\n',
-			]
-
-			# Insert the waiting code before the except block
-			modified_lines = lines[:except_index] + waiting_code + lines[except_index:]
-
-			# Write the modified script to a new file
-			with open(MODIFIED_SCRIPT_PATH, 'w', encoding='utf-8') as f:
-				f.writelines(modified_lines)
-			print(f'Modified script saved at: {MODIFIED_SCRIPT_PATH}')
-
-			# Execute the modified script
-			process = await asyncio.create_subprocess_exec(
-				sys.executable,
-				str(MODIFIED_SCRIPT_PATH),
-				stdout=asyncio.subprocess.PIPE,
-				stderr=asyncio.subprocess.PIPE,
-			)
-			# Stream the script's output
-			stdout_task = asyncio.create_task(stream_output(process.stdout, 'stdout'))
-			stderr_task = asyncio.create_task(stream_output(process.stderr, 'stderr'))
-			await asyncio.gather(stdout_task, stderr_task)
-			returncode = await process.wait()
-			if returncode == 0:
-				print('Modified Playwright script executed successfully.')
-			else:
-				print(f'Modified Playwright script finished with exit code {returncode}.')
-		else:
-			print('run_generated_script False or Playwright script was not generated.')
 	except Exception as e:
 		print(f'An error occurred: {e}')
 
