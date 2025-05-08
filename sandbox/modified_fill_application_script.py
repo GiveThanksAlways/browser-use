@@ -133,21 +133,49 @@ async def run_generated_script():
 
             # --- Step 1 ---
             # Action 1
-            print(f"Navigating to: https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply (Step 1, Action 1)")
-            await page.goto("https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply", timeout=5000)
+            print(f"Navigating to: https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa (Step 1, Action 1)")
+            await page.goto("https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa", timeout=5000)
             await page.wait_for_load_state('load', timeout=5000)
             await page.wait_for_timeout(1000)
 
             # --- Step 2 ---
             # Action 2
-            # Unsupported action type: upload_resume (Step 2, Action 1)
+            await _try_locate_and_act(page, "xpath=//html/body/div[2]/div/div/div[2]/button[2]", "click", step_info="Step 2, Action 1")
+            # Action 3
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[1]/div/div[2]/a", "click", step_info="Step 2, Action 2")
 
             # --- Step 3 ---
-            # Action 3
-            print("\n--- Task marked as Done by agent (Step 3, Action 1) ---")
+            # Action 4
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/div[6]/a", "click", step_info="Step 3, Action 1")
+
+            # --- Step 4 ---
+            # Action 5
+            # Unsupported action type: upload_resume (Step 4, Action 1)
+
+            # --- Step 5 ---
+            # Action 6
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[2]/label/div[2]/input", "fill", text=replace_sensitive_data("Spencer Willett", SENSITIVE_DATA), step_info="Step 5, Action 1")
+            # Action 7
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[3]/label/div[2]/input", "fill", text=replace_sensitive_data("spencer.willett15@gmail.com", SENSITIVE_DATA), step_info="Step 5, Action 2")
+            # Action 8
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[4]/label/div[2]/input", "fill", text=replace_sensitive_data("858-319-9931", SENSITIVE_DATA), step_info="Step 5, Action 3")
+            # Action 9
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[2]/ul/li[1]/label/div[2]/input", "fill", text=replace_sensitive_data("https://www.linkedin.com/in/spencer-willett", SENSITIVE_DATA), step_info="Step 5, Action 4")
+            # Action 10
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[2]/ul/li[2]/label/div[2]/input", "fill", text=replace_sensitive_data("https://www.github.com/GiveThanksAlways", SENSITIVE_DATA), step_info="Step 5, Action 5")
+            # Action 11
+            # Unsupported action type: select_dropdown_option (Step 5, Action 6)
+            # Action 12
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[3]/ul/li[1]/div/div[2]/ul/li[1]/label/input", "click", step_info="Step 5, Action 7")
+            # Action 13
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[3]/ul/li[1]/div/div[2]/ul/li[2]/label/input", "click", step_info="Step 5, Action 8")
+
+            # --- Step 6 ---
+            # Action 14
+            print("\n--- Task marked as Done by agent (Step 6, Action 1) ---")
             print(f"Agent reported success: True")
             # Final Message from agent (may contain placeholders):
-            final_message = replace_sensitive_data("Task completed successfully. I have navigated to the job application page at https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply and uploaded the resume 'Resume_Spencer_Willett.pdf' to the designated field. As per the instructions, I have not submitted the form.", SENSITIVE_DATA)
+            final_message = replace_sensitive_data("Successfully navigated to the job application page, uploaded the resume, and filled in the following fields based on the resume data: Full name (Spencer Willett), Email (spencer.willett15@gmail.com), Phone (858-319-9931), LinkedIn URL (https://www.linkedin.com/in/spencer-willett), and GitHub URL (https://www.github.com/GiveThanksAlways). Also selected language skills for English and Spanish. Could not select university due to option mismatch. No form submission was performed as instructed.", SENSITIVE_DATA)
             print(final_message)
             print("Browser will remain open. Press Ctrl+C to close.")
             await asyncio.Event().wait()

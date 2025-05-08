@@ -9,7 +9,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from browser_use import ActionResult, Agent, Controller
-from browser_use.browser.context import BrowserContext
+from browser_use.browser.browser import Browser, BrowserConfig
+from browser_use.browser.context import BrowserContext, BrowserContextConfig
 
 SANDBOX_PATH = Path(__file__).parent
 RESUME_PATH = SANDBOX_PATH / 'resume.json'
@@ -18,6 +19,26 @@ SCRIPT_PATH = SANDBOX_PATH / 'fill_application_script.py'
 MODIFIED_SCRIPT_PATH = SANDBOX_PATH / 'modified_fill_application_script.py'
 
 controller = Controller()
+
+# Create a single browser instance for all jobs
+viewport_width, viewport_height = 1000, 1000
+start_x, start_y = 1920, 0
+viewport_expansion_pixels = -1
+browser = Browser(
+	config=BrowserConfig(
+		disable_security=True,
+		headless=False,
+		extra_chromium_args=[
+			'--force-dark-mode',
+			'--enable-features=WebContentsForceDark',
+			f'--window-position={start_x},{start_y}',
+			f'--window-size={viewport_width},{viewport_height}',  # This sets the actual window size of Chrome
+		],
+		new_context_config=BrowserContextConfig(
+			browser_window_size={'width': viewport_width, 'height': viewport_height}, viewport_expansion=viewport_expansion_pixels
+		),
+	)
+)
 
 
 @controller.action('Upload resume - call this function to uploade the resume to the attach or upload button')
@@ -77,13 +98,14 @@ async def main():
 			resume_data = json.load(resume_file)
 
 		# Initialize Grok model
-		llm = ChatOpenAI(base_url='https://api.x.ai/v1', model='grok-3-beta', api_key=SecretStr(api_key))
+		llm = ChatOpenAI(base_url='https://api.x.ai/v1', model='grok-3-mini-beta', api_key=SecretStr(api_key))
 
 		# Define the URL and task
 		url = 'https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply'
 		task = f"""
         1. Go to {url}
 		2. Then use the upload_resume controller action to upload the resume (Look for the resume upload field named attach)
+		3. Fill in as much of the job application as you can
         3. Do not submit the form
         """
 
@@ -92,18 +114,23 @@ async def main():
 			task=task,
 			llm=llm,
 			use_vision=False,
-			# message_context=f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}',
+			message_context=f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}',
 			controller=controller,
+			browser=browser,
 			save_playwright_script_path=str(SCRIPT_PATH),
 		)
 
 		# Run the agent to fill the form and generate the script
 		print('Running the agent to fill the form and generate the Playwright script...')
 		await agent.run()
+
 		print('Agent finished running.')
+		input('Press Enter to continue...')
+		await browser.close()
 
 		# Check if the script was generated
-		if SCRIPT_PATH.exists():
+		run_generated_script = False
+		if SCRIPT_PATH.exists() and run_generated_script:
 			print(f'Playwright script generated at: {SCRIPT_PATH}')
 
 			# Modify the generated script to keep the browser open
@@ -144,7 +171,7 @@ async def main():
 			else:
 				print(f'Modified Playwright script finished with exit code {returncode}.')
 		else:
-			print('Playwright script was not generated.')
+			print('run_generated_script False or Playwright script was not generated.')
 	except Exception as e:
 		print(f'An error occurred: {e}')
 
