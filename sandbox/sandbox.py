@@ -21,23 +21,6 @@ controller = Controller()
 viewport_width, viewport_height = 1000, 1000
 start_x, start_y = 1920, 0
 viewport_expansion_pixels = -1
-browser = Browser(
-	config=BrowserConfig(
-		disable_security=True,
-		headless=False,
-		extra_browser_args=[
-			'--force-dark-mode',
-			'--enable-features=WebContentsForceDark',
-			f'--window-position={start_x},{start_y}',
-			f'--window-size={viewport_width},{viewport_height}',
-		],
-		# new_context_config=BrowserContextConfig(
-		# 	browser_window_size={'width': viewport_width, 'height': viewport_height},
-		# 	viewport_expansion=viewport_expansion_pixels,
-		# 	keep_alive=True,
-		# ),
-	)
-)
 
 
 @controller.action('Upload resume - call this function to upload the resume to the attach or upload button')
@@ -66,6 +49,52 @@ async def upload_resume(index: int, browser: BrowserContext):
 		return ActionResult(error=error_msg)
 
 
+async def process_url(url, llm, resume_data, controller, index):
+	x = start_x + index * 100  # Offset each window by 100 pixels
+	port = 9223 + index  # Assign unique debugging port
+	print(f'Launching browser for {url} with port {port}')
+	browser = Browser(
+		config=BrowserConfig(
+			disable_security=True,
+			headless=False,
+			extra_browser_args=[
+				'--force-dark-mode',
+				'--enable-features=WebContentsForceDark',
+				f'--window-position={x},{start_y}',
+				f'--window-size={viewport_width},{viewport_height}',
+				f'--remote-debugging-port={port}',
+			],
+		)
+	)
+	try:
+		async with await browser.new_context(
+			config=BrowserContextConfig(
+				browser_window_size={'width': viewport_width, 'height': viewport_height},
+				viewport_expansion=viewport_expansion_pixels,
+				keep_alive=True,
+			)
+		) as context:
+			await asyncio.sleep(index * 0.5)  # Stagger browser launches
+			page = await context.get_current_page()
+			await page.goto(url)
+			await page.wait_for_load_state('networkidle')
+			message_context = f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}'
+			agent = Agent(
+				task='Fill in the job application with info from my resume (SKIP location, Do NOT Submit resume) and do not submit the form',
+				llm=llm,
+				use_vision=False,
+				browser_context=context,
+				controller=controller,
+				message_context=message_context,
+				save_playwright_script_path=str(SCRIPT_PATH),
+			)
+			await agent.run()
+	except Exception as e:
+		print(f'Error processing {url}: {e}')
+	finally:
+		await browser.close()
+
+
 async def main():
 	try:
 		load_dotenv()
@@ -76,86 +105,18 @@ async def main():
 
 		llm = ChatOpenAI(base_url='https://api.x.ai/v1', model='grok-3-mini-fast-beta', api_key=SecretStr(api_key))
 
-		url = 'https://jobs.lever.co/palantir/81decd45-4b82-4201-a24f-25746b5d8caa/apply'
+		urls = [
+			'https://jobs.lever.co/palantir/a5fdd5ec-d1f3-4837-83af-161b003931dd/apply',
+			'https://jobs.lever.co/palantir/30730c7d-d292-4dcd-a253-6b28258d186c/apply',
+			'https://jobs.lever.co/palantir/34b3a697-6e22-4751-befd-0b7921abbd5f/apply',
+			'https://jobs.lever.co/palantir/492a16bb-6b9f-457e-82c3-294e1a2c565d/apply',
+		]
 
-		tasks = {
-			'1': 'Fill in name, email, phone number, GitHub, linkedIn, website (skip location). Do not submit the form.',
-			'2': 'Use the upload_resume controller action to upload the resume (look for the resume upload field named attach). Do not submit the form.',
-			'3': 'Fill in the job application with info from my resume (SKIP location, Do NOT Submit resume) and do not submit the form',
-			'4': 'Enter Name and Date at the bottom of the application. Do not submit the form.',
-		}
-
-		async with await browser.new_context(
-			config=BrowserContextConfig(
-				browser_window_size={'width': viewport_width, 'height': viewport_height},
-				viewport_expansion=viewport_expansion_pixels,
-				keep_alive=True,
-			)
-		) as context:
-			# Create a page and navigate once
-			page = await context.get_current_page()
-			await page.goto(url)
-			await page.wait_for_load_state('networkidle')
-
-			current_agent = None
-
-			while True:
-				print('\nSelect an option:')
-				for key, desc in tasks.items():
-					print(f'{key}. {desc}')
-				print('p. Pause current task')
-				print('r. Resume current task')
-				print('s. Stop current task')
-				print('q. Quit')
-
-				choice = await asyncio.to_thread(input, 'Enter your choice: ')
-
-				if choice in tasks:
-					if current_agent:
-						print('Stopping previous agent...')
-						current_agent.stop()
-						# Give time for the agent to stop cleanly
-						await asyncio.sleep(1)
-					task = tasks[choice]
-					message_context = f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}'
-					current_agent = Agent(
-						task=task,
-						llm=llm,
-						use_vision=False,
-						browser_context=context,
-						controller=controller,
-						message_context=message_context,
-						save_playwright_script_path=str(SCRIPT_PATH),
-					)
-					print(f'Starting task: {task}')
-					asyncio.create_task(current_agent.run())
-					# Allow some time to see initial logs
-					await asyncio.sleep(1)
-				elif choice == 'p':
-					if current_agent:
-						current_agent.pause()
-						print('Agent paused')
-				elif choice == 'r':
-					if current_agent:
-						current_agent.resume()
-						print('Agent resumed')
-				elif choice == 's':
-					if current_agent:
-						current_agent.stop()
-						current_agent = None
-						print('Agent stopped')
-				elif choice == 'q':
-					if current_agent:
-						current_agent.stop()
-					break
-				else:
-					print('Invalid choice')
+		tasks = [process_url(url, llm, resume_data, controller, i) for i, url in enumerate(urls)]
+		await asyncio.gather(*tasks)
 
 	except Exception as e:
 		print(f'An error occurred: {e}')
-
-	finally:
-		await browser.close()
 
 
 if __name__ == '__main__':
