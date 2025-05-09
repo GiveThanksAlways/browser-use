@@ -139,7 +139,7 @@ async def run_generated_script():
             # Action 3
             await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[4]/label/div[2]/input", "fill", text=replace_sensitive_data("858-319-9931", SENSITIVE_DATA), step_info="Step 1, Action 3")
             # Action 4
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[6]/label/div[2]/input", "fill", text=replace_sensitive_data("Qualcomm", SENSITIVE_DATA), step_info="Step 1, Action 4")
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[6]/label/div[2]/input", "fill", text=replace_sensitive_data("Software Engineer", SENSITIVE_DATA), step_info="Step 1, Action 4")
             # Action 5
             await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[2]/ul/li[1]/label/div[2]/input", "fill", text=replace_sensitive_data("https://www.linkedin.com/in/spencer-willett", SENSITIVE_DATA), step_info="Step 1, Action 5")
             # Action 6
@@ -151,48 +151,28 @@ async def run_generated_script():
             # Action 9
             await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[3]/ul/li[1]/div/div[2]/ul/li[2]/label/input", "click", step_info="Step 1, Action 9")
             # Action 10
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[5]/ul/li/div/div[2]/div/select", "fill", text=replace_sensitive_data("Arizona State University", SENSITIVE_DATA), step_info="Step 1, Action 10")
+            # Unsupported action type: select_dropdown_option (Step 1, Action 10)
 
             # --- Step 2 ---
             # Action 11
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[3]/label/div[2]/input", "fill", text=replace_sensitive_data("spencer.willett15@gmail.com", SENSITIVE_DATA), step_info="Step 2, Action 1")
+            # Unsupported action type: select_dropdown_option (Step 2, Action 1)
             # Action 12
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[1]/ul/li[4]/label/div[2]/input", "fill", text=replace_sensitive_data("858-319-9931", SENSITIVE_DATA), step_info="Step 2, Action 2")
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[4]/ul/li[1]/div/div[2]/ul/li[1]/label/input", "click", step_info="Step 2, Action 2")
             # Action 13
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[2]/ul/li[1]/label/div[2]/input", "fill", text=replace_sensitive_data("https://www.linkedin.com/in/spencer-willett", SENSITIVE_DATA), step_info="Step 2, Action 3")
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[4]/ul/li[2]/div/div[2]/ul/li[2]/label/input", "click", step_info="Step 2, Action 3")
             # Action 14
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[2]/ul/li[2]/label/div[2]/input", "fill", text=replace_sensitive_data("https://www.github.com/GiveThanksAlways", SENSITIVE_DATA), step_info="Step 2, Action 4")
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[7]/ul/li[1]/div/div[2]/textarea", "fill", text=replace_sensitive_data("earning hacking belts on pwn.college website. The website is made by members of Order of the Overflow who organized the Def Con CTF in Las Vegas", SENSITIVE_DATA), step_info="Step 2, Action 4")
             # Action 15
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[2]/ul/li[3]/label/div[2]/input", "fill", text=replace_sensitive_data("givethanksalways.github.io", SENSITIVE_DATA), step_info="Step 2, Action 5")
+            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[7]/ul/li[2]/div/div[2]/textarea", "fill", text=replace_sensitive_data("Palantir and Anduril are two companies that are focused on making America and the world safer. Working at Palantir to me would be a mix of working at a startup, but working in defense technologies vs SaaS", SENSITIVE_DATA), step_info="Step 2, Action 5")
             # Action 16
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[3]/ul/li[1]/div/div[2]/ul/li[1]/label/input", "click", step_info="Step 2, Action 6")
-            # Action 17
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[3]/ul/li[1]/div/div[2]/ul/li[2]/label/input", "click", step_info="Step 2, Action 7")
-            # Action 18
-            # Unsupported action type: select_dropdown_option (Step 2, Action 8)
+            # Unsupported action type: upload_resume (Step 2, Action 6)
 
             # --- Step 3 ---
-            # Action 19
-            # Unsupported action type: select_dropdown_option (Step 3, Action 1)
-            # Action 20
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[4]/ul/li[1]/div/div[2]/ul/li[1]/label/input", "click", step_info="Step 3, Action 2")
-            # Action 21
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[4]/ul/li[2]/div/div[2]/ul/li[2]/label/input", "click", step_info="Step 3, Action 3")
-            # Action 22
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[8]/ul/li[1]/div/div[2]/textarea", "fill", text=replace_sensitive_data("earning hacking belts on pwn.college website. The website is made by members of Order of the Overflow who organized the Def Con CTF in Las Vegas", SENSITIVE_DATA), step_info="Step 3, Action 4")
-            # Action 23
-            await _try_locate_and_act(page, "xpath=//html/body/div[4]/div/div[2]/form/div[8]/ul/li[2]/div/div[2]/textarea", "fill", text=replace_sensitive_data("Palantir and Anduril are two companies that are focused on making America and the world safer. Working at Palantir to me would be a mix of working at a startup, but working in defense technologies vs SaaS", SENSITIVE_DATA), step_info="Step 3, Action 5")
-
-            # --- Step 4 ---
-            # Action 24
-            # Unsupported action type: select_dropdown_option (Step 4, Action 1)
-
-            # --- Step 5 ---
-            # Action 25
-            print("\n--- Task marked as Done by agent (Step 5, Action 1) ---")
-            print(f"Agent reported success: False")
+            # Action 17
+            print("\n--- Task marked as Done by agent (Step 3, Action 1) ---")
+            print(f"Agent reported success: True")
             # Final Message from agent (may contain placeholders):
-            final_message = replace_sensitive_data("Successfully filled the job application form with resume data for Spencer Willett, including personal information (full name, email, phone, LinkedIn URL, GitHub URL, Portfolio URL), clicked checkboxes for language skills (English and Spanish), selected radio buttons for work authorization, and inputted text for favorite project and why Palantir. Skipped location as instructed and did not submit the form. The university dropdown could not be filled due to repeated errors.", SENSITIVE_DATA)
+            final_message = replace_sensitive_data("Successfully filled job application form fields with resume data (skipping location) and uploaded the resume. Resume data used: Name: Spencer Willett; Email: spencer.willett15@gmail.com; Phone: 858-319-9931; Current Company: Software Engineer; LinkedIn: https://www.linkedin.com/in/spencer-willett; GitHub: https://www.github.com/GiveThanksAlways; Portfolio: givethanksalways.github.io; Language Skills: English (ENG), Spanish (SPA); Work Authorization: Yes for both questions; Favorite Project: Earning hacking belts on pwn.college website, made by members of Order of the Overflow who organized the Def Con CTF in Las Vegas; Why Palantir: Palantir and Anduril focus on making America and the world safer, like a startup in defense technologies vs SaaS. University selection failed, but all other steps completed without submitting the application.", SENSITIVE_DATA)
             print(final_message)
         except PlaywrightActionError as pae:
             print(f'\n--- Playwright Action Error: {pae} ---', file=sys.stderr)

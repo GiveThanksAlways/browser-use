@@ -49,7 +49,7 @@ async def upload_resume(index: int, browser: BrowserContext):
 		return ActionResult(error=error_msg)
 
 
-async def process_url(url, llm, resume_data, controller, index):
+async def process_url(url, llm, resume_data, controller, index, browsers):
 	x = start_x + index * 100  # Offset each window by 100 pixels
 	port = 9223 + index  # Assign unique debugging port
 	print(f'Launching browser for {url} with port {port}')
@@ -66,36 +66,40 @@ async def process_url(url, llm, resume_data, controller, index):
 			],
 		)
 	)
+	browsers.append(browser)  # Add browser to the list for later closure
 	try:
-		async with await browser.new_context(
+		context = await browser.new_context(
 			config=BrowserContextConfig(
 				browser_window_size={'width': viewport_width, 'height': viewport_height},
 				viewport_expansion=viewport_expansion_pixels,
 				keep_alive=True,
 			)
-		) as context:
-			await asyncio.sleep(index * 0.5)  # Stagger browser launches
-			page = await context.get_current_page()
-			await page.goto(url)
-			await page.wait_for_load_state('networkidle')
-			message_context = f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}'
-			agent = Agent(
-				task='Fill in the job application with info from my resume (SKIP location, Do NOT Submit resume) and do not submit the form',
-				llm=llm,
-				use_vision=False,
-				browser_context=context,
-				controller=controller,
-				message_context=message_context,
-				save_playwright_script_path=str(SCRIPT_PATH),
-			)
-			await agent.run()
+		)
+		await asyncio.sleep(index * 0.5)  # Stagger browser launches
+		page = await context.get_current_page()
+		await page.goto(url)
+		await page.wait_for_load_state('networkidle')
+		message_context = f'RESUME DATA:\n{json.dumps(resume_data, indent=2)}'
+		agent = Agent(
+			task='Fill in the job application form fields with information from my resume (skip the location field). After filling in everything, then use the upload_resume controller action to upload the resume at the end. DO NOT SUBMIT the application',
+			llm=llm,
+			use_vision=False,
+			browser_context=context,
+			controller=controller,
+			message_context=message_context,
+			save_playwright_script_path=str(SCRIPT_PATH),
+		)
+		await agent.run()
+		# Check if context is still open
+		return context
 	except Exception as e:
 		print(f'Error processing {url}: {e}')
-	finally:
-		await browser.close()
+		return None
 
 
 async def main():
+	browsers = []  # List to hold browser instances
+	contexts = []  # List to hold browser contexts
 	try:
 		load_dotenv()
 		api_key = os.getenv('GROK_API_KEY')
@@ -112,11 +116,25 @@ async def main():
 			'https://jobs.lever.co/palantir/492a16bb-6b9f-457e-82c3-294e1a2c565d/apply',
 		]
 
-		tasks = [process_url(url, llm, resume_data, controller, i) for i, url in enumerate(urls)]
-		await asyncio.gather(*tasks)
+		tasks = [process_url(url, llm, resume_data, controller, i, browsers) for i, url in enumerate(urls)]
+		contexts = await asyncio.gather(*tasks)
+
+		# Wait for user input asynchronously
+		await asyncio.to_thread(
+			input,
+			'All forms have been filled. Browser windows are open for manual review and submission.\nPlease fill in the location field if required and submit the forms manually.\nPress Enter to close all browser windows and exit...',
+		)
 
 	except Exception as e:
 		print(f'An error occurred: {e}')
+	finally:
+		# Close all contexts and browsers after user input
+		for context in contexts:
+			if context:
+				await context.close()
+		for browser in browsers:
+			await browser.close()
+		print('All browsers closed.')
 
 
 if __name__ == '__main__':
