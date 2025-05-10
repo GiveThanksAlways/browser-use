@@ -1,0 +1,133 @@
+{
+    "personal_information": {
+      "name": "Spencer Willett",
+      "email": "spencer.willett15@gmail.com",
+      "mobile": "858-319-9931",
+      "website": "givethanksalways.github.io",
+      "LinkedIn": "https://www.linkedin.com/in/spencer-willett",
+      "GitHub": "https://www.github.com/GiveThanksAlways",
+      "X": "https://x.com/BeGrateful180",
+      "Twitter": "https://x.com/BeGrateful180"
+    },
+    "experience": [
+      {
+        "title": "Freelance Software Engineer",
+        "company": "Software Engineer",
+        "location": "San Diego, CA",
+        "dates": "Sept 2024 - present",
+        "details": [
+          "NVIDIA Jetson Dev Kit: Implemented secure boot for AI startup",
+          "Wifi and BLE: Created and tested wifi and BLE connection methods for the NVIDIA Jetson Dev Kit",
+          "AI Webform Automator: Created a chrome extension for a client to upload a PDF file and automatically fill in a webform"
+        ]
+      },
+      {
+        "title": "Software Engineer - Secure Systems Group",
+        "company": "Qualcomm",
+        "location": "San Diego, CA",
+        "dates": "May 2022 - Dec 2023",
+        "details": [
+          "C Library: Built a library in C for use on Embedded Linux and Android. Involved concepts used for IPC.",
+          "Trusted Virtual Machine Development: Integrated the C Library I built and updated the unit testing suite used to test the Trusted Virtual Machine",
+          "Test Driven Development: Designed C++ code with a Test Driven Development approach using the Google Test framework",
+          "Static Analysis: Fixed code security vulnerabilities for multiple repositories using an internal static analysis tool to audit code",
+          "Open Source: Contributed actively to both open-source and proprietary code bases",
+          "Gerrit/GitHub: Used both Gerrit and GitHub for software collaboration and code reviews"
+        ]
+      },
+      {
+        "title": "Software Engineer - Graduate Student Intern",
+        "company": "Intel",
+        "location": "Chandler, AZ",
+        "dates": "Nov 2019 - Dec 2021",
+        "details": [
+          "12x Optimization: Designed and implemented a 12x data processing optimization (using multithreaded code) to reduce the run time from 1 hour to under 5 minutes. (C#)",
+          "Group Presentation: Gave a presentation to a group of software engineers on development tools and potential uses for the group: Docker, GitLab CI/CD",
+          "Docker: Designed and implemented a replica database using Docker to use for development (previously the group has used the production database during testing phases)"
+        ]
+      },
+      {
+        "title": "Graduate Student Assistant - CSE 539 Applied Cryptography",
+        "company": "Arizona State University",
+        "location": "Tempe, AZ",
+        "dates": "Aug 2021 - Dec 2021",
+        "details": [
+          "Course Design: Proposed, designed, and implemented extra credit projects for the students: Time-Based One-Time Passwords (TOTP) in Python to match the Google Authenticator app on their phones.",
+          "Projects: Developed correct solutions for the five major projects in the course: Steganography, cryptanalysis, MD5 hash collisions, Diffie-Hellman key exchange, and RSA key exchange (C#)"
+        ]
+      }
+    ],
+    "education": [
+      {
+        "institution": "Arizona State University",
+        "degree": "Master of Science in Computer Science",
+        "location": "Tempe, AZ",
+        "dates": "Aug. 2019 - Dec. 2021"
+      },
+      {
+        "institution": "Brigham Young University",
+        "degree": "Bachelor of Science in Physics",
+        "location": "Provo, UT",
+        "dates": "2017"
+      }
+    ],
+    "projects": [
+      {
+        "name": "Virtual Computer",
+        "description": "I built a virtual computer following the Nand2Tetris course offered by the Hebrew University of Jerusalem"
+      }
+    ],
+    "honors_awards": [
+      {
+        "name": "Hackathon 2nd Place Team",
+        "description": "I was the lead software engineer on my team. I built a basic LeNet convolutional neural network using Keras in Python. Hosted by FOX at ASU."
+      }
+    ],
+    "programming_skills": {
+      "languages": [
+        "C++",
+        "C",
+        "Python",
+        "Rust"
+      ],
+      "technologies": [
+        "Linux",
+        "NVIDIA Jetson Dev Kit",
+        "GDB"
+      ]
+    },
+    "extra answers": {
+        "U.S. Work Authorization": "Yes",
+        "SpaceX Employment History": "I have never worked for SpaceX",
+        "Can you perform all of the essential functions of this role with or without reasonable accommodations?": "Yes",
+        "Are you legally authorized to work in the United States?": "I am authorized to work in the United States for any employer",
+        "Are you eligible to obtain the security clearance specified in the job description?": "Yes",
+        "Citizenship Status": "(a) U.S. citizen or national of the United States",
+        "Active Security Clearance(s)": "Never held a clearance",
+        "How did you hear about this job?": "SpaceX website",
+        "School": "Arizona State University",
+        "Degree": "Master's Degree",
+        "Discipline": "Computer Science",
+        "Language Skill(s) (Check all that apply)": ["English (ENG)", "Spanish (SPA)"],
+        "Please tell us how you heard about this opportunity.": "Other",
+        "What has been your favorite project or proudest accomplishment? Why?" : "earning hacking belts on pwn.college website. The website is made by members of Order of the Overflow who organized the Def Con CTF in Las Vegas",
+        "Why do you want to work at Palantir?" : "Palantir and Andruil are two companies that are focused on making America and the world safer. Working at Palantir to me would be a mix of working at a startup, but working in defense technologies vs SaaS"
+    },
+    "more education information": {
+      "GPA (Undergraduate)": "3.3 out of 4.0",
+      "GPA (Graduate)": "3.7 out of 4.0",
+      "GPA (Doctorate)": "Not Applicable/Do not recall",
+      "SAT Score": "Did not take/Do not recall",
+      "ACT Score": "Did not take/Do not recall",
+      "GRE Score": "Did not take/Do not recall"
+    }
+    ,
+    "Voluntary Self-Identification": {
+        "gender": "Male",
+        "Are you Hispanic/Latino?": "Decline to self Identify",
+        "race": ["White"],
+        "Please identify your race": "White",
+        "Veteran Status": "I am not a protected veteran",
+        "Disability Status": "No, I do not have a disability and have note had one in the past"
+    }
+  }

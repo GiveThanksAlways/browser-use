@@ -36,3 +36,6 @@ private_example.py
 private_example
 
 uv.lock
+
+!sandbox/resume.json
+!sandbox/Resume_Spencer_Willett.pdf
