@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import platform
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,15 +13,23 @@ from browser_use import ActionResult, Agent, Controller
 from browser_use.browser.browser import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 
+# powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User")
+
 SANDBOX_PATH = Path(__file__).parent
 RESUME_PATH = SANDBOX_PATH / 'resume.json'
 PDF_RESUME_PATH = SANDBOX_PATH / 'Resume_Spencer_Willett.pdf'
 SCRIPT_PATH = SANDBOX_PATH / 'fill_application_script.py'
+# Browser configuration - update with your browser path
+if platform.system() == 'Windows':
+	CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'  # Windows
+else:
+	CHROME_PATH = '/opt/google/chrome/chrome'  # Linux
 
 controller = Controller()
 
 viewport_width, viewport_height = 1000, 1000
-start_x, start_y = 1920, 0
+start_x, start_y = -1920, 0
 viewport_expansion_pixels = -1
 
 
@@ -50,7 +60,7 @@ async def upload_resume(index: int, browser: BrowserContext):
 
 
 async def process_url(url, llm, resume_data, controller, index, browsers):
-	x = start_x + index * 100  # Offset each window by 100 pixels
+	x = start_x  # + index * 100  # Offset each window by 100 pixels
 	port = 9223 + index  # Assign unique debugging port
 	print(f'Launching browser for {url} with port {port}')
 	browser = Browser(
@@ -62,7 +72,7 @@ async def process_url(url, llm, resume_data, controller, index, browsers):
 				'--enable-features=WebContentsForceDark',
 				f'--window-position={x},{start_y}',
 				f'--window-size={viewport_width},{viewport_height}',
-				f'--remote-debugging-port={port}',
+				# f'--remote-debugging-port={port}',
 			],
 		)
 	)
@@ -103,6 +113,9 @@ async def main():
 	try:
 		load_dotenv()
 		api_key = os.getenv('GROK_API_KEY')
+		if api_key is None:
+			print('Error: GROK_API_KEY not set')
+			sys.exit(1)
 
 		with open(RESUME_PATH, 'r', encoding='utf-8') as resume_file:
 			resume_data = json.load(resume_file)
